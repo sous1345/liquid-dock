@@ -1,0 +1,4 @@
+#include "resource.h"
+// PawnIO modules (LGPL-2.1, https://github.com/namazso/PawnIO.Modules release 0.2.11)
+IDR_AMD17    RCDATA "..\\third_party\\pawnio\\modules\\AMDFamily17.bin"
+IDR_INTELMSR RCDATA "..\\third_party\\pawnio\\modules\\IntelMSR.bin"

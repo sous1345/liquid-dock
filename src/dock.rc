@@ -1,0 +1,29 @@
+#include <winver.h>
+#include "version.h"
+
+1 ICON "..\\assets\\app.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION LD_VERSION_BIN
+ PRODUCTVERSION LD_VERSION_BIN
+ FILEFLAGSMASK 0x3fL
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041204B0"
+        BEGIN
+            VALUE "FileDescription", "Liquid Dock"
+            VALUE "FileVersion", LD_VERSION_STR
+            VALUE "ProductName", "Liquid Dock"
+            VALUE "ProductVersion", LD_VERSION_STR
+            VALUE "OriginalFilename", "LiquidDock.exe"
+            VALUE "LegalCopyright", "MIT License"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0412, 1200
+    END
+END

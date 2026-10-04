@@ -1,0 +1,34 @@
+#include <winver.h>
+#include "resource.h"
+#include "../src/version.h"
+
+1 ICON "..\\assets\\app.ico"
+
+IDR_DOCK     RCDATA "..\\build\\LiquidDock.exe"
+IDR_SENSORS  RCDATA "..\\build\\LiquidDockSensors.exe"
+IDR_LICENSE  RCDATA "..\\LICENSE"
+IDR_NOTICES  RCDATA "..\\THIRD_PARTY_NOTICES.txt"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION LD_VERSION_BIN
+ PRODUCTVERSION LD_VERSION_BIN
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041204B0"
+        BEGIN
+            VALUE "FileDescription", "Liquid Dock Setup"
+            VALUE "FileVersion", LD_VERSION_STR
+            VALUE "ProductName", "Liquid Dock"
+            VALUE "ProductVersion", LD_VERSION_STR
+            VALUE "OriginalFilename", "LiquidDock-Setup.exe"
+            VALUE "LegalCopyright", "MIT License"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0412, 1200
+    END
+END
