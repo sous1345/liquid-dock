@@ -63,6 +63,9 @@ struct Settings {
     float iconSize = 44;        // at a 1440 px short screen side; scaled with the screen
     float magnification = 1.7f; // 1 = off
     int   glassStyle = 1;       // 0 clear, 1 normal, 2 frosted
+    bool  showDesktopButton = true;
+    int   clockSize = 0;        // 0 normal, 1 large; independent of icon size
+    int   iconSpacing = 1;      // 0 compact, 1 normal, 2 wide
     float showDelay = 0.05f;    // seconds at edge before reveal
     float hideDelay = 0.35f;    // seconds outside before hide
     bool  autostart = false;

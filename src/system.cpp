@@ -8,6 +8,7 @@
 #include <shellapi.h>
 #include <thread>
 #include "native_tray.h"
+#include "taskbar_visibility.h"
 
 SysInfo g_sys;
 NativeTaskbar g_taskbar;
@@ -118,6 +119,9 @@ static bool HasEmptyRegion(HWND h) {
 }
 
 static void Vanish(HWND h) {
+    // Explorer can rebuild the region while activating a native flyout. Keep
+    // the entire taskbar transparent as well, independent of that region.
+    taskbarvisibility::Protect(h);
     if (!HasEmptyRegion(h) && IsWindowVisible(h) && h == FindWindowW(L"Shell_TrayWnd", nullptr)) nativetray::CacheTrayButtons(h);   // still expanded
     if (!IsWindowVisible(h)) ShowWindow(h, SW_SHOWNA);   // e.g. hidden by an older version
     if (!HasEmptyRegion(h)) {
@@ -140,26 +144,31 @@ void NativeTaskbar::StartEnforcer() {
     }).detach();
 }
 
-void NativeTaskbar::Hide() {
+bool NativeTaskbar::Hide() {
     std::lock_guard<std::recursive_mutex> lk(mu);
     APPBARDATA abd = { sizeof(abd) };
     abd.hWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (!stateSaved && abd.hWnd) {   // the original state is only meaningful once explorer's taskbar exists
+    if (!abd.hWnd) return false;
+    if (!stateSaved) {   // do not hide anything until the recovery state has been saved
         originalState = SHAppBarMessage(ABM_GETSTATE, &abd);
-        stateSaved = true;
         // remember across crashes so a later run can restore it
-        HKEY k;
-        if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\LiquidDock", 0, nullptr, 0, KEY_WRITE, nullptr, &k, nullptr) == ERROR_SUCCESS) {
+        HKEY k = nullptr;
+        LSTATUS saved = RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\LiquidDock", 0, nullptr, 0, KEY_WRITE, nullptr, &k, nullptr);
+        if (saved == ERROR_SUCCESS) {
             DWORD v = (DWORD)originalState;
             DWORD existing = 0, sz = sizeof(existing);
-            if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\LiquidDock", L"TaskbarState", RRF_RT_REG_DWORD, nullptr, &existing, &sz) != ERROR_SUCCESS)
-                RegSetValueExW(k, L"TaskbarState", 0, REG_DWORD, (BYTE*)&v, sizeof(v));
-            else originalState = existing;
+            saved = RegGetValueW(HKEY_CURRENT_USER, L"Software\\LiquidDock", L"TaskbarState", RRF_RT_REG_DWORD, nullptr, &existing, &sz);
+            if (saved == ERROR_FILE_NOT_FOUND || saved == ERROR_PATH_NOT_FOUND)
+                saved = RegSetValueExW(k, L"TaskbarState", 0, REG_DWORD, (BYTE*)&v, sizeof(v));
+            else if (saved == ERROR_SUCCESS) originalState = existing;
             RegCloseKey(k);
         }
+        if (saved != ERROR_SUCCESS) { Log(L"taskbar backup failed: %ld; keeping native taskbar", saved); return false; }
+        stateSaved = true;
     }
     hidden = true;
     Enforce();
+    return true;
 }
 
 void NativeTaskbar::Enforce(bool onUiThread) {
@@ -172,6 +181,7 @@ void NativeTaskbar::Enforce(bool onUiThread) {
     if (!stateSaved) { Hide(); return; }
     // auto-hide frees the reserved work area so maximised windows use the full screen;
     // explorer may reset it while it starts, so keep checking
+    ForEachTaskbar(Vanish);
     APPBARDATA abd = { sizeof(abd) };
     abd.hWnd = tray;
     UINT_PTR st = SHAppBarMessage(ABM_GETSTATE, &abd);
@@ -182,19 +192,52 @@ void NativeTaskbar::Enforce(bool onUiThread) {
     ForEachTaskbar(Vanish);
 }
 
-void NativeTaskbar::Restore() {
+bool NativeTaskbar::WithInvisibleTaskbars(const std::function<bool()>& action) {
+    std::lock_guard<std::recursive_mutex> lk(mu);
+    if (!hidden || !stateSaved) return false;
+    bool protectedAll = true; int count = 0;
+    ForEachTaskbar([&](HWND h) { ++count; if (!taskbarvisibility::Protect(h)) protectedAll = false; });
+    // Never activate Explorer's controls on the strength of an empty region alone.
+    if (!count || !protectedAll) return false;
+    bool result = action();
+    Enforce();
+    ForEachTaskbar([&](HWND h) { if (!taskbarvisibility::IsProtected(h)) result = false; });
+    return result;
+}
+
+bool NativeTaskbar::Restore() {
     std::lock_guard<std::recursive_mutex> lk(mu);
     hidden = false;
     DWORD st = 0, sz = sizeof(st);
-    bool fromReg = RegGetValueW(HKEY_CURRENT_USER, L"Software\\LiquidDock", L"TaskbarState", RRF_RT_REG_DWORD, nullptr, &st, &sz) == ERROR_SUCCESS;
+    LSTATUS read = RegGetValueW(HKEY_CURRENT_USER, L"Software\\LiquidDock", L"TaskbarState", RRF_RT_REG_DWORD, nullptr, &st, &sz);
+    bool fromReg = read == ERROR_SUCCESS;
+    if (!stateSaved && !fromReg && read != ERROR_FILE_NOT_FOUND && read != ERROR_PATH_NOT_FOUND) return false;
     if (!stateSaved && fromReg) { originalState = st; stateSaved = true; }
-    ForEachTaskbar([](HWND h) { SetWindowRgn(h, nullptr, TRUE); ShowWindow(h, SW_SHOWNA); });
+    HWND primary = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!primary) return false;   // Explorer is restarting: retain the recovery record
+    std::vector<HWND> bars;
+    ForEachTaskbar([&](HWND h) { bars.push_back(h); });
+    bool restored = true;
+    for (HWND h : bars) {
+        if (!taskbarvisibility::Restore(h)) restored = false;
+        if (!SetWindowRgn(h, nullptr, TRUE)) restored = false;
+        ShowWindow(h, SW_SHOWNA);
+        if (!IsWindow(h) || !IsWindowVisible(h) || HasEmptyRegion(h)) restored = false;
+    }
     if (stateSaved) {
         APPBARDATA abd = { sizeof(abd) };
-        abd.hWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
+        abd.hWnd = primary;
         abd.lParam = originalState;
         SHAppBarMessage(ABM_SETSTATE, &abd);
+        // ABM_SETSTATE always returns TRUE. Read back the setting instead.
+        // ABS_ALWAYSONTOP is no longer meaningful on supported modern Windows versions.
+        if ((SHAppBarMessage(ABM_GETSTATE, &abd) & ABS_AUTOHIDE) != (originalState & ABS_AUTOHIDE)) restored = false;
     }
-    RegDeleteKeyValueW(HKEY_CURRENT_USER, L"Software\\LiquidDock", L"TaskbarState");
+    std::vector<HWND> current;
+    ForEachTaskbar([&](HWND h) { current.push_back(h); });
+    if (!restored || primary != FindWindowW(L"Shell_TrayWnd", nullptr) || current != bars) return false;
+    LSTATUS removed = RegDeleteKeyValueW(HKEY_CURRENT_USER, L"Software\\LiquidDock", L"TaskbarState");
+    if (removed != ERROR_SUCCESS && removed != ERROR_FILE_NOT_FOUND && removed != ERROR_PATH_NOT_FOUND) return false;
     stateSaved = false;
+    return true;
 }

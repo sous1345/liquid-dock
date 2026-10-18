@@ -86,6 +86,9 @@ void Settings::Load() {
             else if (k == "iconSize") iconSize = std::clamp(std::stof(v), 32.0f, 96.0f);
             else if (k == "magnification") magnification = std::clamp(std::stof(v), 1.0f, 2.5f);
             else if (k == "glassStyle") glassStyle = std::clamp(std::stoi(v), 0, 2);
+            else if (k == "showDesktopButton") showDesktopButton = std::stoi(v) != 0;
+            else if (k == "clockSize") clockSize = std::clamp(std::stoi(v), 0, 1);
+            else if (k == "iconSpacing") iconSpacing = std::clamp(std::stoi(v), 0, 2);
             else if (k == "showDelay") showDelay = std::clamp(std::stof(v), 0.0f, 2.0f);
             else if (k == "hideDelay") hideDelay = std::clamp(std::stof(v), 0.0f, 3.0f);
             else if (k == "autostart") autostart = std::stoi(v) != 0;
@@ -101,6 +104,9 @@ void Settings::Save() const {
       << "iconSize=" << iconSize << "\n"
       << "magnification=" << magnification << "\n"
       << "glassStyle=" << glassStyle << "\n"
+      << "showDesktopButton=" << (showDesktopButton ? 1 : 0) << "\n"
+      << "clockSize=" << clockSize << "\n"
+      << "iconSpacing=" << iconSpacing << "\n"
       << "showDelay=" << showDelay << "\n"
       << "hideDelay=" << hideDelay << "\n"
       << "autostart=" << (autostart ? 1 : 0) << "\n"

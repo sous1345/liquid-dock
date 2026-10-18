@@ -21,8 +21,16 @@ static bool g_running = true;
 static double g_rebuildAt = 0;
 static bool g_deviceResetRequested = false;
 static double g_nextDeviceRetry = 0;
+static bool g_docksReady = false;
+static HANDLE g_watchdogProcess = nullptr;
+static constexpr const wchar_t* kInstanceMutex = L"LiquidDock.SingleInstance";
+
+static bool WatchdogReady() {
+    return g_watchdogProcess && WaitForSingleObject(g_watchdogProcess, 0) == WAIT_TIMEOUT;
+}
 
 static void BuildDocks() {
+    g_docksReady = false;
     g_docks.clear();
     std::vector<HMONITOR> mons;
     EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR m, HDC, LPRECT, LPARAM lp) -> BOOL {
@@ -36,9 +44,11 @@ static void BuildDocks() {
         else Log(L"dock create failed for monitor %d", i - 1);
     }
     Log(L"docks: %d", (int)g_docks.size());
-    // never leave the user with neither a dock nor a taskbar
-    if (g_docks.empty()) { if (g_taskbar.hidden) { Log(L"no dock - showing the taskbar"); g_taskbar.Restore(); } }
-    else if (!g_taskbar.hidden) g_taskbar.Hide();
+    // A replacement must exist on every monitor before hiding all native taskbars.
+    g_docksReady = !mons.empty() && g_docks.size() == mons.size();
+    if (!g_docksReady) g_docks.clear();
+    if (g_docksReady && WatchdogReady()) { if (!g_taskbar.hidden) g_taskbar.Hide(); }
+    else g_taskbar.Restore();
 }
 
 static void SetAutostart(bool on) {
@@ -102,9 +112,9 @@ static void SetAutostart(bool on) {
 static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == g_msgShellHook && g_msgShellHook) { g_apps.OnShellHook(w, l); return 0; }
     if (m == g_msgTaskbarCreated && g_msgTaskbarCreated) {
-        // explorer restarted: hide its new taskbar again
-        g_taskbar.hidden = false;
-        g_taskbar.Hide();
+        // A restored taskbar must stay available while the dock is unavailable or exiting.
+        if (g_running && g_docksReady && WatchdogReady()) g_taskbar.Hide();
+        else g_taskbar.Restore();
         return 0;
     }
     switch (m) {
@@ -173,7 +183,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_QUERYENDSESSION:
         return TRUE;
     case WM_ENDSESSION:
-        if (w) g_taskbar.Restore();
+        if (w) { g_running = false; g_taskbar.Restore(); }
         return 0;
     case WM_CLOSE:
         g_running = false;
@@ -202,31 +212,70 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS*) {
 
 // A second copy of the exe that waits for the dock to exit. If the dock was killed (Task Manager,
 // crash the handler missed), the saved taskbar state is still there: restore the taskbar.
-static int RunWatchdog(DWORD pid) {
+// Serialize recovery with the next dock instance, but release the mutex between retries
+// so an Explorer restart cannot prevent the user starting a fresh dock.
+static int RestoreTaskbarWhenIdle(DWORD timeoutMs) {
+    ULONGLONG start = GetTickCount64();
+    do {
+        HANDLE m = CreateMutexW(nullptr, FALSE, kInstanceMutex);
+        if (!m) return (int)GetLastError();
+        DWORD wait = WaitForSingleObject(m, 0);
+        if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) { CloseHandle(m); return ERROR_BUSY; }
+        bool ok = g_taskbar.Restore();
+        ReleaseMutex(m); CloseHandle(m);
+        if (ok) return 0;
+        if (GetTickCount64() - start >= timeoutMs) break;
+        Sleep(250);
+    } while (true);
+    // The registry backup remains available to the restore shortcut or a later run.
+    return ERROR_RETRY;
+}
+
+static int RunWatchdog(DWORD pid, const wchar_t* readyName) {
     HANDLE p = OpenProcess(SYNCHRONIZE, FALSE, pid);
-    if (!p) return 0;
-    WaitForSingleObject(p, INFINITE);
-    CloseHandle(p);
-    Sleep(500);
-    if (HANDLE m = OpenMutexW(SYNCHRONIZE, FALSE, L"LiquidDock.SingleInstance")) { CloseHandle(m); return 0; }   // a new dock owns it
+    if (!p && GetLastError() != ERROR_INVALID_PARAMETER) return 1;
+    if (readyName) {
+        HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, readyName);
+        if (!p || !ready) { if (p) CloseHandle(p); if (ready) CloseHandle(ready); return 1; }
+        BOOL signaled = SetEvent(ready); CloseHandle(ready);
+        if (!signaled) { CloseHandle(p); return 1; }
+    }
+    if (p) {
+        DWORD wait = WaitForSingleObject(p, INFINITE);
+        CloseHandle(p);
+        if (wait != WAIT_OBJECT_0) return 1;
+    }
     DWORD st = 0, sz = sizeof(st);
     if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\LiquidDock", L"TaskbarState", RRF_RT_REG_DWORD, nullptr, &st, &sz) != ERROR_SUCCESS)
         return 0;   // clean exit: already restored
-    g_taskbar.Restore();
-    return 0;
+    int rc = RestoreTaskbarWhenIdle(30000);
+    return rc == ERROR_BUSY ? 0 : rc;   // a new dock owns recovery now
 }
 
-static void StartWatchdog() {
+static bool StartWatchdog() {
     wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::wstring cmd = L"\"" + std::wstring(exe) + L"\" --watchdog " + std::to_wstring(GetCurrentProcessId());
+    GUID id; wchar_t guid[40] = {};
+    if (FAILED(CoCreateGuid(&id)) || !StringFromGUID2(id, guid, ARRAYSIZE(guid))) return false;
+    std::wstring name = L"Local\\LiquidDock.WatchdogReady." + std::wstring(guid);
+    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, name.c_str());
+    if (!ready) return false;
+    std::wstring cmd = L"\"" + std::wstring(exe) + L"\" --watchdog " + std::to_wstring(GetCurrentProcessId()) + L" --ready " + name;
     STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
     if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, DETACHED_PROCESS, nullptr, nullptr, &si, &pi)) {
-        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+        CloseHandle(pi.hThread);
+        HANDLE waits[] = { ready, pi.hProcess };
+        if (WaitForMultipleObjects(2, waits, FALSE, 5000) == WAIT_OBJECT_0) g_watchdogProcess = pi.hProcess;
+        else CloseHandle(pi.hProcess);
     }
+    CloseHandle(ready);
+    return WatchdogReady();
 }
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
-    if (cmd && wcsstr(cmd, L"--watchdog ")) return RunWatchdog((DWORD)_wtoi(wcsstr(cmd, L"--watchdog ") + 11));
+    if (cmd && wcsstr(cmd, L"--watchdog ")) {
+        const wchar_t* ready = wcsstr(cmd, L" --ready ");
+        return RunWatchdog((DWORD)_wtoi(wcsstr(cmd, L"--watchdog ") + 11), ready ? ready + 9 : nullptr);
+    }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     winrt::init_apartment(winrt::apartment_type::single_threaded);
 
@@ -256,20 +305,22 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
             if (p && WaitForSingleObject(p, 3000) == WAIT_TIMEOUT) {
                 TerminateProcess(p, 1);
                 WaitForSingleObject(p, 2000);
-                g_taskbar.Restore();
             }
             if (p) CloseHandle(p);
-        } else g_taskbar.Restore();
-        return 0;
+        }
+        return RestoreTaskbarWhenIdle(5000);
     }
 
-    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"LiquidDock.SingleInstance");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+    HANDLE mutex = CreateMutexW(nullptr, FALSE, kInstanceMutex);
+    if (!mutex) return 1;
+    DWORD ownership = WaitForSingleObject(mutex, 3000);
+    if (ownership != WAIT_OBJECT_0 && ownership != WAIT_ABANDONED) { CloseHandle(mutex); return 0; }
 
     SetUnhandledExceptionFilter(CrashHandler);
     EnableThemedMenus();
     g_settings.Load();
     if (!g_gfx.Init()) {
+        g_taskbar.Restore();
         MessageBoxW(nullptr, L"GPU 초기화에 실패했습니다.", L"Liquid Dock", MB_ICONERROR);
         return 1;
     }
@@ -281,6 +332,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
     wc.lpszClassName = L"LiquidDockMain";
     RegisterClassExW(&wc);
     g_mainWnd = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"Liquid Dock", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, hInst, nullptr);
+    if (!g_mainWnd) { g_taskbar.Restore(); return 1; }
     g_msgShellHook = RegisterWindowMessageW(L"SHELLHOOK");
     g_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     ChangeWindowMessageFilterEx(g_mainWnd, g_msgTaskbarCreated, MSGFLT_ALLOW, nullptr);
@@ -292,16 +344,15 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
     g_sys.Tick(NowSeconds());
     g_sys.Start();
     g_sensors.Start();
-    g_taskbar.Hide();
     g_taskbar.StartEnforcer();
-    StartWatchdog();
+    if (!StartWatchdog()) Log(L"watchdog not ready; keeping native taskbar");
     BuildDocks();
     if (g_settings.autostart) SetAutostart(true);
     // right after installing: show the dock for a few seconds so people see where it is
     double welcomeUntil = args.find(L"--welcome") != std::wstring::npos ? NowSeconds() + 3.5 : 0;
     if (welcomeUntil) Dock::debugForceShow = true;
 
-    double last = NowSeconds();
+    double last = NowSeconds(), nextRestoreTry = 0;
     while (g_running) {
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -320,6 +371,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
         if ((g_deviceResetRequested || g_gfx.DeviceLost()) && now >= g_nextDeviceRetry) {
             g_deviceResetRequested = false;
             Log(L"GPU device lost - recreating");
+            g_docksReady = false;
             g_docks.clear();
             if (g_gfx.Reset()) { g_apps.ReloadIcons(); BuildDocks(); }
             else {
@@ -327,6 +379,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
                 Log(L"device re-create failed, retrying");
                 if (g_taskbar.hidden) g_taskbar.Restore();   // usable taskbar until the dock is back
             }
+        }
+
+        if ((!g_docksReady || !WatchdogReady()) && now >= nextRestoreTry) {
+            g_taskbar.Restore();
+            nextRestoreTry = now + 1.0;
         }
 
         g_apps.Tick(now);
@@ -355,9 +412,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
         }
     }
 
+    g_docksReady = false;
     g_docks.clear();
     g_taskbar.Restore();
     DeregisterShellHookWindow(g_mainWnd);
     if (mutex) { ReleaseMutex(mutex); CloseHandle(mutex); }
+    if (g_watchdogProcess) CloseHandle(g_watchdogProcess);
     return 0;
 }

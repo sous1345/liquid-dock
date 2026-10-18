@@ -34,6 +34,7 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 Dock::Dock(HMONITOR m, int i, bool p) : monitor(m), index(i), primary(p) {}
 
 Dock::~Dock() {
+    windowPreview.Dismiss();
     capture.Stop();
     if (hwnd) DestroyWindow(hwnd);
 }
@@ -50,9 +51,9 @@ void Dock::Metrics() {
     baseNominal = std::round(g_settings.iconSize * scale);
     margin = std::round(6 * scale);
     mag = std::max(1.0f, g_settings.magnification);
+    g_gfx.EnsureFonts(scale);
     fit = 1;
     ApplyFit(0);
-    base = baseNominal;
     bool vert = IsVertical(g_settings.edge);
     len = (float)(vert ? (mon.bottom - mon.top) : (mon.right - mon.left));
     float headroom = std::max(base * (mag - 1), base * 0.65f) + (vert ? 240 * scale : 46 * scale);
@@ -228,42 +229,81 @@ void Dock::SyncSlots() {
 
 // ---------------------------------------------------------------- layout
 
+IDWriteTextFormat* Dock::ClockFont(bool date) const {
+    if (date) return g_settings.clockSize == 1 ? g_gfx.fmtDateLarge.Get() : g_gfx.fmtDate.Get();
+    return g_settings.clockSize == 1 ? g_gfx.fmtTimeLarge.Get() : g_gfx.fmtTime.Get();
+}
+
+Dock::LayoutMetrics Dock::MeasureMetrics(float fitFactor) {
+    LayoutMetrics m{};
+    constexpr float spacing[] = { 0.22f, 0.32f, 0.44f };
+    float thick = baseNominal * fitFactor * 1.30f;
+    m.icon = std::max(1.0f, std::round(thick * 0.60f));
+    m.gap = std::round(m.icon * spacing[std::clamp(g_settings.iconSpacing, 0, 2)]);
+
+    bool vert = IsVertical(g_settings.edge);
+    const auto time = TextSize(ClockFont(), vert ? L"88:88" : g_sys.timeText);
+    const auto date = TextSize(ClockFont(true), g_sys.dateText);
+    float clockDepth = vert ? time.width : time.height + date.height;
+    // Keep the clock readable even when many apps require smaller icons. The
+    // extra space is padding; clock size does not change the icon-size setting.
+    m.padding = std::ceil(std::max((thick - m.icon) * 0.5f,
+                                   (clockDepth + 8 * scale - m.icon) * 0.5f));
+    m.thickness = m.icon + 2 * m.padding;
+    m.separator = 1 + m.gap;
+    const float minButton = 24 * scale;
+    m.trayButton = m.icon * 0.45f;
+    m.network = m.volume = std::max(m.icon * 0.55f, minButton);
+    m.connectivity = vert ? std::max(m.network, m.volume) : m.network + m.volume;
+    m.clock = vert ? std::max(m.icon * 0.8f, time.height + 8 * scale)
+                   : std::max(time.width, date.width) + 12 * scale;
+    m.sensor = vert ? m.icon * 1.3f
+                    : TextWidth(g_gfx.fmtClockSmall.Get(), L"CPU 100°") + 16 * scale;
+    m.desktop = g_settings.showDesktopButton ? std::max(m.icon * 0.55f, minButton) : 0;
+    // Always available, with a generous cell independent of crowded app icons.
+    m.settings = std::max(m.icon * 0.65f, 32 * scale);
+    return m;
+}
+
 void Dock::ApplyFit(float dt) {
-    // how long would the dock be at nominal size?
+    // Use the same measured tray and spacing as Layout, including the clock
+    // and optional desktop button. Fit never depends on the cursor position.
     if (dt > 0 && len > 0) {
         float n = 0;
         for (auto& s : slots) n += clampf(s.appear.target, 0, 1);
-        float b = baseNominal;
-        float unit = b * 1.13f;
-        float tray = IsVertical(g_settings.edge) ? b * (0.55f + 0.55f + 0.8f + 1.3f) + b * 0.13f + 1 : b * 1.1f + 220 * scale;
-        float need = b * 0.30f + n * unit + tray;
-        float avail = len - 24 * scale;
-        float target = need > avail ? std::max(0.35f, avail / need) : 1.0f;
+        auto required = [&](float factor) {
+            const auto m = MeasureMetrics(factor);
+            // Upper bound for the cosine expansion budget on equally spaced
+            // slots. Reserve it before hover so a full dock cannot jump in size.
+            float expansion = m.icon * (mag - 1) *
+                std::min(n, 1 + m.icon * 2.9f / (m.icon + m.gap));
+            return 2 * m.padding + n * (m.icon + m.gap) + m.TrayWidth() + expansion;
+        };
+        float target = 1;
+        const float avail = len - 24 * scale;
+        if (required(1) > avail) {
+            // The user prefers further icon reduction to losing items off-screen.
+            // Keep a physical-pixel floor; the clock retains its selected font.
+            float lo = 0, hi = 1;
+            for (int i = 0; i < 16; ++i) {
+                float mid = (lo + hi) * 0.5f;
+                if (required(mid) <= avail) lo = mid; else hi = mid;
+            }
+            target = lo;
+        }
         float k = std::min(1.0f, dt * 10);
         fit += (target - fit) * k;
         if (std::fabs(target - fit) < 0.001f) fit = target;
     }
-    // the glass keeps the same thickness; icons sit inside it with more breathing room
-    constexpr float kThick = 1.30f;      // glass thickness relative to the icon-size setting
-    constexpr float kIconRatio = 0.60f;  // icon height / glass thickness
-    float thick = baseNominal * fit * kThick;
-    base = std::round(thick * kIconRatio);
-    pad = std::round((thick - base) * 0.5f);
-    gap = std::round(base * 0.22f);
-    barThick = base + 2 * pad;
+    const auto m = MeasureMetrics(fit);
+    base = m.icon; pad = m.padding; gap = m.gap; barThick = m.thickness;
     magRange = base * 2.9f;
 }
 
 void Dock::Layout(double) {
-    bool vert = IsVertical(g_settings.edge);
     float unit = base + gap;
-
-    float trayBtnW = base * 0.45f, netW = base * 0.55f, volW = base * 0.55f, clkW;
-    if (!vert) clkW = std::max(TextWidth(g_gfx.fmtClock.Get(), g_sys.timeText), TextWidth(g_gfx.fmtClockSmall.Get(), g_sys.dateText)) + 12 * scale;
-    else clkW = base * 0.8f;
-    float sensW = vert ? base * 1.3f : TextWidth(g_gfx.fmtClockSmall.Get(), L"CPU 100°") + 16 * scale;
-    float sepW = 1 + gap;
-    trayW = sepW + trayBtnW + netW + volW + clkW + sensW;
+    const auto metrics = MeasureMetrics(fit);
+    trayW = metrics.TrayWidth();
 
     std::vector<float> c0(slots.size());
     float x = pad;
@@ -278,14 +318,34 @@ void Dock::Layout(double) {
     float total0 = x + trayW + pad;
     float start0 = std::round(len * 0.5f - total0 * 0.5f);
 
-    // magnified sizes (bell curve around the cursor, measured in the un-magnified layout)
+    // Keep the expansion budget independent of cursor position so that the dock
+    // stays centered and its ends do not slide while the pointer moves along it.
     std::vector<float> sz(slots.size(), base);
     float m = magAmount.x;
-    if (m > 0.0005f && mag > 1.001f) {
-        float hu = hoverU - start0;
+    if (m > 0.0005f && mag > 1.001f && !c0.empty()) {
+        float hu = clampf(hoverU - start0, c0.front(), c0.back());
+        auto bell = [](float distance, float radius) {
+            return distance < radius ? 0.5f * (1 + std::cos(kPi * distance / radius)) : 0.0f;
+        };
+        auto weightSum = [&](float center, float radius) {
+            float sum = 0;
+            for (size_t i = 0; i < slots.size(); ++i)
+                sum += slots[i].weight * bell(std::fabs(center - c0[i]), radius);
+            return sum;
+        };
+        float budget = weightSum((c0.front() + c0.back()) * 0.5f, magRange);
+        float lo = 0.001f, hi = magRange;
+        for (int i = 0; i < 16 && weightSum(hu, hi) < budget; ++i) hi *= 2;
+        // Near either end, widen the bell toward the remaining icons rather than
+        // translating the whole dock or adding empty padding beside the tray.
+        for (int i = 0; i < 14; ++i) {
+            float mid = (lo + hi) * 0.5f;
+            if (weightSum(hu, mid) < budget) lo = mid; else hi = mid;
+        }
+        float sum = weightSum(hu, hi);
+        float correction = sum > 0 ? std::min(1.0f, budget / sum) : 0;
         for (size_t i = 0; i < slots.size(); ++i) {
-            float d = std::fabs(hu - c0[i]);
-            float f = d < magRange ? 0.5f * (1 + std::cos(kPi * d / magRange)) : 0;
+            float f = bell(std::fabs(hu - c0[i]), hi) * correction;
             sz[i] = base * (1 + (mag - 1) * f * m);
         }
     }
@@ -294,21 +354,7 @@ void Dock::Layout(double) {
     xm += trailingGap.x * unit;
     total = xm + trayW + pad;
 
-    // keep the content under the cursor still while magnifying
-    float start = start0 + (total0 - total) * 0.5f;
-    if (m > 0.0005f) {
-        float x0 = hoverU - start0, a0 = pad, aM = pad, mapped = x0;
-        bool found = x0 < a0;
-        for (size_t i = 0; i < slots.size() && !found; ++i) {
-            float seg0 = slots[i].gapBefore.x * unit + unit * slots[i].weight;
-            float segM = slots[i].gapBefore.x * unit + (sz[i] + gap) * slots[i].weight;
-            if (x0 < a0 + seg0) { mapped = aM + (seg0 > 0 ? (x0 - a0) / seg0 * segM : 0); found = true; }
-            a0 += seg0; aM += segM;
-        }
-        if (!found) mapped = aM + (x0 - a0);
-        float anchored = hoverU - mapped;
-        start = lerpf(start, anchored, smooth01(m * 1.5f));
-    }
+    float start = (len - total) * 0.5f;
     if (total < len - 8 * scale) start = clampf(start, 4 * scale, len - 4 * scale - total);
 
     x = start + pad;
@@ -321,11 +367,16 @@ void Dock::Layout(double) {
         x += (sz[i] + gap) * s.weight;
     }
     x += trailingGap.x * unit;
-    sepU = x; x += sepW;
-    trayU0 = x; trayU1 = x + trayBtnW; x = trayU1;
-    netU0 = x; netU1 = x + netW; volU0 = netU1; volU1 = volU0 + volW; clkU0 = volU1; clkU1 = clkU0 + clkW;
-    sensU0 = clkU1; sensU1 = sensU0 + sensW;
-    barU0 = start; barU1 = sensU1 + pad;
+    sepU = x; x += metrics.separator;
+    trayU0 = x; trayU1 = x + metrics.trayButton;
+    netU0 = trayU1; netU1 = netU0 + metrics.network;
+    volU0 = IsVertical(g_settings.edge) ? netU0 : netU1;
+    volU1 = volU0 + metrics.volume;
+    clkU0 = volU1; clkU1 = clkU0 + metrics.clock;
+    sensU0 = clkU1; sensU1 = sensU0 + metrics.sensor;
+    desktopU0 = sensU1; desktopU1 = desktopU0 + metrics.desktop;
+    settingsU0 = desktopU1; settingsU1 = settingsU0 + metrics.settings;
+    barU0 = start; barU1 = settingsU1 + pad;
 }
 
 POINT Dock::ScreenPointUV(float u, float v) const {
@@ -353,18 +404,37 @@ bool Dock::CursorInPanel() const {
     return p.x >= panelRect.left - 4 && p.x <= panelRect.right + 4 && p.y >= panelRect.top - 4 && p.y <= panelRect.bottom + 4;
 }
 
-float Dock::TextWidth(IDWriteTextFormat* f, const std::wstring& s) {
-    if (!f || s.empty()) return 0;
-    static std::unordered_map<std::wstring, float> cache;
+D2D1_SIZE_F Dock::TextSize(IDWriteTextFormat* f, const std::wstring& s) {
+    if (!f || s.empty()) return {};
+    static std::unordered_map<std::wstring, D2D1_SIZE_F> cache;
     std::wstring key = std::to_wstring((uintptr_t)f) + L"|" + s;
     auto it = cache.find(key);
     if (it != cache.end()) return it->second;
     ComPtr<IDWriteTextLayout> tl;
-    if (FAILED(g_gfx.dw->CreateTextLayout(s.c_str(), (UINT32)s.size(), f, 4000, 200, &tl))) return 0;
-    DWRITE_TEXT_METRICS tm; tl->GetMetrics(&tm);
+    if (FAILED(g_gfx.dw->CreateTextLayout(s.c_str(), (UINT32)s.size(), f, 4000, 200, &tl))) return {};
+    DWRITE_TEXT_METRICS tm{};
+    if (FAILED(tl->GetMetrics(&tm))) return {};
     if (cache.size() > 512) cache.clear();
-    cache[key] = tm.widthIncludingTrailingWhitespace;
-    return tm.widthIncludingTrailingWhitespace;
+    D2D1_SIZE_F size = { tm.widthIncludingTrailingWhitespace, tm.height };
+    cache[key] = size;
+    return size;
+}
+
+float Dock::TextWidth(IDWriteTextFormat* f, const std::wstring& s) {
+    return TextSize(f, s).width;
+}
+
+D2D1_RECT_F Dock::ConnectivityRect(HitKind kind) const {
+    const bool network = kind == HitNet;
+    auto r = RectUV(network ? netU0 : volU0, network ? netU1 : volU1,
+                    margin - hideOff, margin + barThick - hideOff);
+    if (IsVertical(g_settings.edge)) {
+        // Split in screen coordinates so network stays left and volume stays
+        // right on both the left and right screen edges.
+        float mid = (r.left + r.right) * 0.5f;
+        if (network) r.right = mid; else r.left = mid;
+    }
+    return r;
 }
 
 Dock::Hit Dock::HitTestUV(float u, float v) {
@@ -384,11 +454,18 @@ Dock::Hit Dock::HitTestUV(float u, float v) {
         }
     }
     if (v < vb0 - 4 || v > vb1) return h;
+    const auto point = W(u, v);
+    for (HitKind kind : { HitNet, HitVol }) {
+        auto r = ConnectivityRect(kind);
+        if (point.x >= r.left && point.x < r.right && point.y >= r.top && point.y < r.bottom) {
+            h.kind = kind; return h;
+        }
+    }
     if (u >= trayU0 && u < trayU1) h.kind = HitTray;
-    else if (u >= netU0 && u < netU1) h.kind = HitNet;
-    else if (u >= volU0 && u < volU1) h.kind = HitVol;
     else if (u >= clkU0 && u < clkU1) h.kind = HitClock;
     else if (u >= sensU0 && u < sensU1) h.kind = HitSensor;
+    else if (g_settings.showDesktopButton && u >= desktopU0 && u < desktopU1) h.kind = HitDesktop;
+    else if (u >= settingsU0 && u <= barU1) h.kind = HitSettings;
     else h.kind = HitBar;
     return h;
 }
@@ -482,13 +559,15 @@ void Dock::Update(double now, float dt, POINT cursor) {
          (panelAlpha.target > 0.5f && cursorU >= sensU0 - 4 * scale && cursorU <= sensU1 + 4 * scale &&
           cursorV <= margin + barThick + 16 * scale));   // bridge between cell and panel
     bool keep = menuOpen || dragging || pressSlot >= 0 || debugForceShow;
+    bool fullscreen = FullscreenAppActive();
+    bool inPreview = windowPreview.Contains(cursor);
     if (debugForceShow) reveal.target = 1;
 
     if (reveal.target < 0.5f) {
         if (atEdge) {
             if (edgeSince < 0) edgeSince = now;
             lastCaptureWanted = now;        // pre-warm capture
-            if (now - edgeSince >= g_settings.showDelay && !FullscreenAppActive()) {
+            if (now - edgeSince >= g_settings.showDelay && !fullscreen) {
                 reveal.target = 1;
                 outsideSince = -1;
                 SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -496,7 +575,8 @@ void Dock::Update(double now, float dt, POINT cursor) {
         } else edgeSince = -1;
         if (inMonitor && cursorV < 60 * scale) lastCaptureWanted = now;
     } else {
-        if (insideDock || keep) outsideSince = -1;
+        // The edge that revealed the dock also keeps it open, including corners.
+        if (keep || (!fullscreen && (insideDock || atEdge || inPreview))) outsideSince = -1;
         else {
             if (outsideSince < 0) outsideSince = now;
             if (now - outsideSince >= g_settings.hideDelay) { reveal.target = 0; edgeSince = -1; }
@@ -508,10 +588,16 @@ void Dock::Update(double now, float dt, POINT cursor) {
     bool overApps = insideDock && cursorU >= barU0 && cursorU <= appEnd;
     bool overBar = overApps && cursorV <= margin + barThick + 2 * scale;
     bool overMag = overApps && cursorV <= margin + pad + base * (1 + (mag - 1) * magAmount.x) + 6 * scale;
-    if (mag > 1.01f && reveal.x > 0.55f && !dragging && !menuOpen && (overBar || (magAmount.target > 0.5f && overMag))) {
+    // Once expanded, hold the layout while crossing into the fixed controls.
+    // Otherwise collapsing the apps moves the clock/desktop button away from
+    // the pointer in the middle of an attempted click.
+    bool overControls = insideDock && cursorU >= appEnd && cursorU <= barU1 &&
+                        cursorV <= margin + barThick + 2 * scale;
+    if (mag > 1.01f && reveal.x > 0.55f && !dragging && !menuOpen &&
+        (overBar || (magAmount.target > 0.5f && (overMag || overControls)))) {
         magAmount.target = 1;
-        hoverU = cursorU;
-    } else magAmount.target = 0;
+        if (overApps) hoverU = cursorU;
+    } else if (!(inPreview && !fullscreen && !dragging && !menuOpen)) magAmount.target = 0;
 
     // ---- drag
     if (pressSlot >= 0 && !dragging && pressSlot < (int)slots.size() && slots[pressSlot].app &&
@@ -610,6 +696,22 @@ void Dock::Update(double now, float dt, POINT cursor) {
         hoverKind = h.kind; hoverSlot = h.slot;
     }
 
+    // DWM previews live in a separate, non-activating owned popup. Only the
+    // hovered app is passed in; app discovery and activation remain in AppModel.
+    std::shared_ptr<AppItem> previewApp;
+    RECT previewAnchor{};
+    if (hoverKind == HitSlot && hoverSlot >= 0 && !slots[hoverSlot].ghost) {
+        auto& s = slots[hoverSlot];
+        previewApp = s.app;
+        float half = std::max(s.size * s.weight * 0.5f, 8 * scale);
+        auto r = RectUV(s.u - half, s.u + half, 0,
+            margin + pad + base * mag + 12 * scale);
+        previewAnchor = {winX + (LONG)std::floor(r.left), winY + (LONG)std::floor(r.top),
+            winX + (LONG)std::ceil(r.right), winY + (LONG)std::ceil(r.bottom)};
+    }
+    windowPreview.Update(hwnd, previewApp, previewAnchor, mon, g_settings.edge, scale, cursor, now,
+        reveal.x > 0.95f && reveal.target > 0.5f && !fullscreen && !menuOpen && !dragging && pressKind == HitNone);
+
     // ---- system monitor panel: opens on hovering the sensor cell, stays while over cell/panel
     bool wantPanel = (debugForcePanel && reveal.target > 0.5f) || reveal.target > 0.5f && !menuOpen && !dragging &&
         (hoverKind == HitSensor || hoverKind == HitPanel || (panelAlpha.target > 0.5f && insideDock &&
@@ -642,7 +744,14 @@ void Dock::Update(double now, float dt, POINT cursor) {
         GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_LONGDATE, &st, nullptr, d, 128, nullptr);
         tip = d;
         tooltipU = (clkU0 + clkU1) * 0.5f; tooltipV = margin + barThick + 8 * scale - hideOff;
+    } else if (hoverKind == HitDesktop) {
+        tip = L"바탕화면 보기 / 창 복원";
+        tooltipU = (desktopU0 + desktopU1) * 0.5f; tooltipV = margin + barThick + 8 * scale - hideOff;
+    } else if (hoverKind == HitSettings) {
+        tip = L"설정";
+        tooltipU = (settingsU0 + settingsU1) * 0.5f; tooltipV = margin + barThick + 8 * scale - hideOff;
     }
+    if (windowPreview.Open()) { tip.clear(); tooltipAlpha.snap(0); }
     if (!tip.empty()) { tooltipText = tip; tooltipAlpha.target = 1; }
     else tooltipAlpha.target = 0;
     tooltipAlpha.step(dt, 500, 1.0f);
@@ -1100,11 +1209,18 @@ void Dock::Render() {
         auto hover = [&](HitKind k, float a0, float a1) {
             if (hoverKind != k) return;
             auto r = RectUV(a0 + 1, a1 - 1, v0 + pad * 0.6f, v1 - pad * 0.6f);
+            if (k == HitNet || k == HitVol) {
+                r = ConnectivityRect(k);
+                r.left += 2 * scale; r.right -= 2 * scale;
+                r.top += 2 * scale; r.bottom -= 2 * scale;
+            }
             float ink = InkAt((a0 + a1) * 0.5f);
             brush->SetColor(D2D1::ColorF(1 - ink, 1 - ink, 1 - ink, lerpf(0.16f, 0.08f, ink) * vis));
             dc->FillRoundedRectangle({ r, 8 * scale, 8 * scale }, brush.Get());
         };
         hover(HitTray, trayU0, trayU1); hover(HitNet, netU0, netU1); hover(HitVol, volU0, volU1); hover(HitClock, clkU0, clkU1); hover(HitSensor, sensU0, sensU1);
+        if (g_settings.showDesktopButton) hover(HitDesktop, desktopU0, desktopU1);
+        hover(HitSettings, settingsU0, barU1);
         DrawSensorCell(v0, v1, vis);
 
         auto shadowText = [&](const std::wstring& t, IDWriteTextFormat* f, D2D1_RECT_F r, float u, float a) {
@@ -1123,15 +1239,31 @@ void Dock::Render() {
         const wchar_t* chevG = g_settings.edge == Edge::Bottom ? L"" : g_settings.edge == Edge::Top ? L""
                              : g_settings.edge == Edge::Left ? L"" : L"";
         shadowText(chevG, g_gfx.fmtGlyph.Get(), RectUV(trayU0, trayU1, v0, v1), (trayU0 + trayU1) / 2, vis * 0.85f);
-        shadowText(netG, g_gfx.fmtGlyph.Get(), RectUV(netU0, netU1, v0, v1), (netU0 + netU1) / 2, vis);
-        shadowText(volG, g_gfx.fmtGlyph.Get(), RectUV(volU0, volU1, v0, v1), (volU0 + volU1) / 2, vis);
+        shadowText(netG, g_gfx.fmtGlyph.Get(), ConnectivityRect(HitNet), (netU0 + netU1) / 2, vis);
+        shadowText(volG, g_gfx.fmtGlyph.Get(), ConnectivityRect(HitVol), (volU0 + volU1) / 2, vis);
+        shadowText(L"\uE713", g_gfx.fmtGlyph.Get(), RectUV(settingsU0, settingsU1, v0, v1), (settingsU0 + settingsU1) / 2, vis);
         float cu = (clkU0 + clkU1) / 2;
         if (!IsVertical(g_settings.edge)) {
-            float mid = (v0 + v1) * 0.5f;
-            shadowText(g_sys.timeText, g_gfx.fmtClock.Get(), RectUV(clkU0, clkU1, mid, mid + 18 * scale), cu, vis);
-            shadowText(g_sys.dateText, g_gfx.fmtClockSmall.Get(), RectUV(clkU0, clkU1, mid - 16 * scale, mid), cu, vis);
+            auto r = RectUV(clkU0, clkU1, v0, v1);
+            float timeH = TextSize(ClockFont(), g_sys.timeText).height;
+            float dateH = TextSize(ClockFont(true), g_sys.dateText).height;
+            float top = (r.top + r.bottom - timeH - dateH) * 0.5f;
+            shadowText(g_sys.timeText, ClockFont(), { r.left, top, r.right, top + timeH }, cu, vis);
+            shadowText(g_sys.dateText, ClockFont(true), { r.left, top + timeH, r.right, top + timeH + dateH }, cu, vis);
         } else {
-            shadowText(g_sys.timeShort, g_gfx.fmtClock.Get(), RectUV(clkU0, clkU1, v0, v1), cu, vis);
+            shadowText(g_sys.timeShort, ClockFont(), RectUV(clkU0, clkU1, v0, v1), cu, vis);
+        }
+        if (g_settings.showDesktopButton) {
+            // A desktop outline, kept upright on all four edges. Drawing and
+            // hit testing use the same cell; the entire cell is clickable.
+            float du = (desktopU0 + desktopU1) * 0.5f;
+            auto p = W(du, (v0 + v1) * 0.5f);
+            brush->SetColor(Ink(du, vis));
+            auto screen = D2D1::RectF(p.x - 8 * scale, p.y - 6 * scale,
+                                      p.x + 8 * scale, p.y + 4 * scale);
+            dc->DrawRoundedRectangle({ screen, 1.5f * scale, 1.5f * scale }, brush.Get(), 1.4f * scale);
+            dc->DrawLine({ p.x, p.y + 4 * scale }, { p.x, p.y + 7 * scale }, brush.Get(), 1.4f * scale);
+            dc->DrawLine({ p.x - 4 * scale, p.y + 7 * scale }, { p.x + 4 * scale, p.y + 7 * scale }, brush.Get(), 1.4f * scale);
         }
     }
 
@@ -1225,7 +1357,7 @@ void Dock::Click(const Hit& h) {
     case HitTray: {
         float u = (trayU0 + trayU1) * 0.5f;
         if (!nativetray::OpenOverflow(ScreenPointUV(u, margin + barThick * 0.5f), g_settings.edge, BarScreenRect()))
-            nativetray::OpenQuickSettings();
+            MessageBoxW(hwnd, L"숨겨진 아이콘 창을 열지 못했습니다. 잠시 후 다시 시도해 주세요.", L"Liquid Dock", MB_OK | MB_ICONINFORMATION);
         break;
     }
     case HitNet: nativetray::OpenQuickSettings(); break;
@@ -1237,6 +1369,10 @@ void Dock::Click(const Hit& h) {
         break;
     }
     case HitClock: nativetray::OpenCalendar(); break;
+    case HitDesktop:
+        if (g_settings.showDesktopButton) nativetray::ToggleDesktop();
+        break;
+    case HitSettings: ShowDockMenu(); break;
     case HitSensor: case HitPanel:
         if (g_sensors.CpuTempAvailable() || g_settings.cpuTemp) SendKeyCombo({ VK_CONTROL, VK_SHIFT, VK_ESCAPE });   // Task Manager
         else { SetForegroundWindow(hwnd); g_sensors.EnableCpuTemp(hwnd); }
@@ -1363,6 +1499,7 @@ void Dock::ShowTrayMenu(HitKind kind) {
 void Dock::ShowDockMenu() {
     HMENU m = CreatePopupMenu();
     HMENU pos = CreatePopupMenu(), size = CreatePopupMenu(), mg = CreatePopupMenu(), gl = CreatePopupMenu(), dl = CreatePopupMenu();
+    HMENU clock = CreatePopupMenu(), spacing = CreatePopupMenu();
     auto chk = [](bool b) { return MF_STRING | (b ? MF_CHECKED : 0); };
     AppendMenuW(pos, chk(g_settings.edge == Edge::Bottom), 10, L"아래");
     AppendMenuW(pos, chk(g_settings.edge == Edge::Left), 11, L"왼쪽");
@@ -1381,8 +1518,16 @@ void Dock::ShowDockMenu() {
     AppendMenuW(dl, chk(g_settings.showDelay < 0.1f), 50, L"즉시");
     AppendMenuW(dl, chk(g_settings.showDelay >= 0.1f && g_settings.showDelay < 0.3f), 51, L"짧게");
     AppendMenuW(dl, chk(g_settings.showDelay >= 0.3f), 52, L"길게");
+    AppendMenuW(clock, chk(g_settings.clockSize == 0), 80, L"보통");
+    AppendMenuW(clock, chk(g_settings.clockSize == 1), 81, L"크게");
+    AppendMenuW(spacing, chk(g_settings.iconSpacing == 0), 90, L"좁게");
+    AppendMenuW(spacing, chk(g_settings.iconSpacing == 1), 91, L"보통");
+    AppendMenuW(spacing, chk(g_settings.iconSpacing == 2), 92, L"넓게");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)pos, L"위치");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)size, L"아이콘 크기");
+    AppendMenuW(m, MF_POPUP, (UINT_PTR)spacing, L"아이콘 간격");
+    AppendMenuW(m, MF_POPUP, (UINT_PTR)clock, L"시계 글자 크기");
+    AppendMenuW(m, chk(g_settings.showDesktopButton), 82, L"바탕화면 보기 버튼");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)mg, L"확대 효과");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)gl, L"유리 질감");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)dl, L"나타나는 속도");
@@ -1420,6 +1565,9 @@ void Dock::ShowDockMenu() {
         else { SetForegroundWindow(hwnd); g_sensors.EnableCpuTemp(hwnd); }
         break;
     case 99: PostMessageW(g_mainWnd, WM_CLOSE, 0, 0); break;
+    case 80: case 81: g_settings.clockSize = cmd - 80; rebuild = true; break;
+    case 82: g_settings.showDesktopButton = !g_settings.showDesktopButton; rebuild = true; break;
+    case 90: case 91: case 92: g_settings.iconSpacing = cmd - 90; rebuild = true; break;
     }
     if (cmd) g_settings.Save();
     if (cmd == 40 || cmd == 41 || cmd == 42) {
@@ -1434,6 +1582,7 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
     case WM_NCHITTEST: return HTCLIENT;
     case WM_LBUTTONDOWN: {
+        windowPreview.Dismiss();
         float u, v; ClientToUV(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), u, v);
         Hit h = HitTestUV(u, v);
         pressKind = h.kind; pressSlot = h.kind == HitSlot ? h.slot : -1;
@@ -1459,6 +1608,7 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         if (dragging && (HWND)lp != hwnd) EndDrag(true);
         return 0;
     case WM_RBUTTONUP: {
+        windowPreview.Dismiss();
         float u, v; ClientToUV(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), u, v);
         Hit h = HitTestUV(u, v);
         if (h.kind == HitSlot && slots[h.slot].app) ShowAppMenu(slots[h.slot]);
@@ -1467,6 +1617,7 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_MBUTTONUP: {
+        windowPreview.Dismiss();
         float u, v; ClientToUV(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), u, v);
         Hit h = HitTestUV(u, v);
         if (h.kind == HitSlot && slots[h.slot].app) { auto app = slots[h.slot].app; g_apps.Launch(*app, index); }
@@ -1481,6 +1632,7 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_DROPFILES: {
+        windowPreview.Dismiss();
         HDROP hd = (HDROP)wp;
         POINT p; DragQueryPoint(hd, &p);
         float u, v; ClientToUV(p.x, p.y, u, v);

@@ -37,10 +37,12 @@ public:
     // text
     ComPtr<IDWriteTextFormat>     fmtTooltip, fmtClock, fmtClockSmall, fmtGlyph, fmtTiny;
     ComPtr<IDWriteTextFormat>     fmtPanelLabel, fmtPanelSub, fmtPanelValue, fmtPanelSmallR;
+    // Dedicated clock formats: changing the clock must not resize sensor/panel text.
+    ComPtr<IDWriteTextFormat>     fmtTime, fmtDate, fmtTimeLarge, fmtDateLarge;
     ComPtr<ID3D11BlendState>      blendOver;   // premultiplied "over"
     float fontScale = 0;
     void EnsureFonts(float scale);
-    struct FontSet { float scale; ComPtr<IDWriteTextFormat> f[9]; };
+    struct FontSet { float scale; ComPtr<IDWriteTextFormat> f[13]; };
     std::vector<FontSet> fontSets;
 
     winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice winrtDevice{ nullptr };

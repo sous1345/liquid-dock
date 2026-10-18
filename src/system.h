@@ -23,12 +23,13 @@ extern SysInfo g_sys;
 // Hides the native Windows taskbar while the dock runs and restores it afterwards.
 class NativeTaskbar {
 public:
-    void Hide();
-    void Restore();
+    bool Hide();
+    bool Restore();             // false keeps the saved state available for a later retry
     // Re-hide if explorer showed it again. The periodic check runs on its own thread
     // (StartEnforcer) because explorer calls can block for seconds after logon or resume.
     void Enforce(bool onUiThread = true);
     void StartEnforcer();
+    bool WithInvisibleTaskbars(const std::function<bool()>& action);
     std::atomic<bool> hidden{ false };
 private:
     std::recursive_mutex mu;

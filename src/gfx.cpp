@@ -171,6 +171,7 @@ bool Gfx::DeviceLost() const {
 bool Gfx::Reset() {
     winrtDevice = nullptr;
     fmtTooltip.Reset(); fmtClock.Reset(); fmtClockSmall.Reset(); fmtGlyph.Reset(); fmtTiny.Reset();
+    fmtTime.Reset(); fmtDate.Reset(); fmtTimeLarge.Reset(); fmtDateLarge.Reset();
     fmtPanelLabel.Reset(); fmtPanelSub.Reset(); fmtPanelValue.Reset(); fmtPanelSmallR.Reset();
     fontScale = 0;
     fontSets.clear();
@@ -261,6 +262,7 @@ void Gfx::EnsureFonts(float scale) {
             fontScale = scale;
             fmtTooltip = s.f[0]; fmtClock = s.f[1]; fmtClockSmall = s.f[2]; fmtGlyph = s.f[3]; fmtTiny = s.f[4];
             fmtPanelLabel = s.f[5]; fmtPanelSub = s.f[6]; fmtPanelValue = s.f[7]; fmtPanelSmallR = s.f[8];
+            fmtTime = s.f[9]; fmtDate = s.f[10]; fmtTimeLarge = s.f[11]; fmtDateLarge = s.f[12];
             return;
         }
     }
@@ -295,8 +297,13 @@ void Gfx::EnsureFonts(float scale) {
     fmtPanelValue->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     mk(L"Segoe UI Variable Text", DWRITE_FONT_WEIGHT_NORMAL, 10.5f, fmtPanelSmallR);
     fmtPanelSmallR->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    mk(L"Segoe UI Variable Text", DWRITE_FONT_WEIGHT_SEMI_BOLD, 16.0f, fmtTime);
+    mk(L"Segoe UI Variable Text", DWRITE_FONT_WEIGHT_NORMAL, 12.0f, fmtDate);
+    mk(L"Segoe UI Variable Text", DWRITE_FONT_WEIGHT_SEMI_BOLD, 20.0f, fmtTimeLarge);
+    mk(L"Segoe UI Variable Text", DWRITE_FONT_WEIGHT_NORMAL, 14.0f, fmtDateLarge);
     fontSets.push_back({ scale, { fmtTooltip, fmtClock, fmtClockSmall, fmtGlyph, fmtTiny,
-                                  fmtPanelLabel, fmtPanelSub, fmtPanelValue, fmtPanelSmallR } });
+                                  fmtPanelLabel, fmtPanelSub, fmtPanelValue, fmtPanelSmallR,
+                                  fmtTime, fmtDate, fmtTimeLarge, fmtDateLarge } });
 }
 
 void Gfx::UpdateCB(const GlassCB& c) {

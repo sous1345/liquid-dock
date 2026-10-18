@@ -3,6 +3,7 @@
 #include "gfx.h"
 #include "capture.h"
 #include "apps.h"
+#include "window_preview.h"
 
 extern Settings g_settings;
 
@@ -35,7 +36,7 @@ private:
         // layout
         float u = 0, size = 0, u0 = 0, weight = 0;
     };
-    enum HitKind { HitNone, HitSlot, HitTray, HitNet, HitVol, HitClock, HitSensor, HitPanel, HitBar };
+    enum HitKind { HitNone, HitSlot, HitTray, HitNet, HitVol, HitClock, HitSensor, HitPanel, HitBar, HitDesktop, HitSettings };
     struct Hit { HitKind kind = HitNone; int slot = -1; };
 
     void Metrics();
@@ -59,7 +60,17 @@ private:
     void Click(const Hit& h);
     void EndDrag(bool commit);
     float TextWidth(IDWriteTextFormat* f, const std::wstring& s);
+    D2D1_SIZE_F TextSize(IDWriteTextFormat* f, const std::wstring& s);
+    IDWriteTextFormat* ClockFont(bool date = false) const;
+    D2D1_RECT_F ConnectivityRect(HitKind kind) const;
+    struct LayoutMetrics {
+        float icon, padding, gap, thickness;
+        float separator, trayButton, network, volume, connectivity, clock, sensor, desktop, settings;
+        float TrayWidth() const { return separator + trayButton + connectivity + clock + sensor + desktop + settings; }
+    };
+    LayoutMetrics MeasureMetrics(float fitFactor);
     bool FullscreenAppActive() const;
+    WindowPreview windowPreview;
 
     RECT mon{};          // monitor rect (physical px)
     int winX = 0, winY = 0, winW = 0, winH = 0;
@@ -86,6 +97,8 @@ private:
     POINT ScreenPointUV(float u, float v) const;
     RECT  BarScreenRect() const;
     float sepU = 0, netU0 = 0, netU1 = 0, volU0 = 0, volU1 = 0, clkU0 = 0, clkU1 = 0, sensU0 = 0, sensU1 = 0;
+    float desktopU0 = 0, desktopU1 = 0;
+    float settingsU0 = 0, settingsU1 = 0;
     // system monitor: cell at the end of the dock + glass popover panel
     Spring panelAlpha;
     double panelOutsideSince = -1;
