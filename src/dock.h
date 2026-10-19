@@ -36,7 +36,7 @@ private:
         // layout
         float u = 0, size = 0, u0 = 0, weight = 0;
     };
-    enum HitKind { HitNone, HitSlot, HitTray, HitNet, HitVol, HitClock, HitSensor, HitPanel, HitBar, HitDesktop, HitOled, HitSettings };
+    enum HitKind { HitNone, HitSlot, HitTray, HitNet, HitVol, HitClock, HitSensor, HitPanel, HitBar, HitDesktop, HitTheme, HitOled, HitSettings };
     struct Hit { HitKind kind = HitNone; int slot = -1; };
 
     void Metrics();
@@ -60,15 +60,20 @@ private:
     void Click(const Hit& h);
     void ToggleOled();
     void DrawOledButton(float v0, float v1, float vis);
+    void DrawThemeButton(float v0, float v1, float vis);
     void EndDrag(bool commit);
     float TextWidth(IDWriteTextFormat* f, const std::wstring& s);
     D2D1_SIZE_F TextSize(IDWriteTextFormat* f, const std::wstring& s);
     IDWriteTextFormat* ClockFont(bool date = false) const;
-    D2D1_RECT_F ConnectivityRect(HitKind kind) const;
+    // Small square buttons (network, volume, desktop, theme, OLED, settings). Two share a cell,
+    // split across the bar's thickness, when half the bar is still a comfortable click target.
+    D2D1_RECT_F ButtonRect(HitKind kind, bool hit = false) const;
+    float ButtonIconScale() const { return stackButtons ? 0.8f : 1.0f; }
     struct LayoutMetrics {
         float icon, padding, gap, thickness;
-        float separator, trayButton, network, volume, connectivity, clock, sensor, desktop, oled, settings;
-        float TrayWidth() const { return separator + trayButton + connectivity + clock + sensor + desktop + oled + settings; }
+        float separator, trayButton, network, volume, connectivity, clock, sensor, desktop, themeBtn, oled, settings, utilities;
+        bool stack;
+        float TrayWidth() const { return separator + trayButton + connectivity + clock + sensor + utilities; }
     };
     LayoutMetrics MeasureMetrics(float fitFactor);
     bool FullscreenAppActive() const;
@@ -100,6 +105,9 @@ private:
     RECT  BarScreenRect() const;
     float sepU = 0, netU0 = 0, netU1 = 0, volU0 = 0, volU1 = 0, clkU0 = 0, clkU1 = 0, sensU0 = 0, sensU1 = 0;
     float desktopU0 = 0, desktopU1 = 0;
+    int netHalf = -1, volHalf = -1, desktopHalf = -1, themeHalf = -1, oledHalf = -1, settingsHalf = -1;   // -1: whole cell
+    bool stackButtons = false;
+    float themeU0 = 0, themeU1 = 0;
     float oledU0 = 0, oledU1 = 0;
     float settingsU0 = 0, settingsU1 = 0;
     // system monitor: cell at the end of the dock + glass popover panel

@@ -58,6 +58,11 @@ bool Enable(HMONITOR){++oledActions;oledOn=true;return true;}
 bool Disable(){++oledActions;oledOn=false;return true;}
 void Reapply(){}
 }
+static int themeActions=0; static bool themeLight=false;
+namespace theme {
+bool IsLight(){return themeLight;}
+bool Toggle(){++themeActions;themeLight=!themeLight;return true;}
+}
 #define GetMonitorInfoW MatrixMonitorInfo
 #define GetForegroundWindow MatrixForeground
 #define MonitorFromWindow MatrixMonitorFromWindow
@@ -137,47 +142,57 @@ static void AssertHitGeometry(Dock& d) {
   float u2,v2;d.ClientToUV((int)px.x,(int)px.y,u2,v2);Check(d.HitTestUV(u2,v2).kind==item.kind,"tray control rendered center maps to its own hit target");
   Check(item.start>=-1 && item.end<=d.len+1,"tray controls remain inside monitor edge");
  }
- auto network=d.ConnectivityRect(Dock::HitNet),volume=d.ConnectivityRect(Dock::HitVol);
- Check(network.right<=volume.left+0.1f,"network is left of volume without overlapping click regions");
- Check(std::fabs((network.top+network.bottom)-(volume.top+volume.bottom))<0.1f,"network and volume share one horizontal row on all edges");
- if(IsVertical(g_settings.edge))Check(d.netU0==d.volU0 && d.netU1==d.volU1 && d.clkU0==d.volU1,"vertical connectivity consumes only one row before clock");
- else Check(d.netU1==d.volU0 && d.clkU0==d.volU1,"horizontal connectivity preserves two adjacent cells before clock");
- for(auto kind:{Dock::HitNet,Dock::HitVol}){
-  auto r=d.ConnectivityRect(kind);
-  Check(r.left>=0 && r.top>=0 && r.right<=d.winW && r.bottom<=d.winH,"connectivity cells stay inside dock window");
+ auto network=d.ButtonRect(Dock::HitNet),volume=d.ButtonRect(Dock::HitVol);
+ if(d.stackButtons){
+  Check(d.netU0==d.volU0 && d.netU1==d.volU1 && d.clkU0==d.volU1,"stacked connectivity shares one cell before clock");
+  if(IsVertical(g_settings.edge))Check(network.right<=volume.left+0.1f,"side docks: network left of volume");
+  else Check(network.bottom<=volume.top+0.1f,"top and bottom docks: network above volume");
+ }else Check(d.netU1==d.volU0 && d.clkU0==d.volU1,"unstacked connectivity keeps two adjacent cells before clock");
+ // every small button: inside the window, a comfortable size, its own click area, no overlap
+ struct Btn{Dock::HitKind kind;bool on;float u0,u1;} btns[]={{Dock::HitNet,true,d.netU0,d.netU1},{Dock::HitVol,true,d.volU0,d.volU1},
+  {Dock::HitDesktop,g_settings.showDesktopButton,d.desktopU0,d.desktopU1},{Dock::HitTheme,g_settings.showThemeButton,d.themeU0,d.themeU1},
+  {Dock::HitOled,g_settings.showOledButton,d.oledU0,d.oledU1},{Dock::HitSettings,true,d.settingsU0,d.settingsU1}};
+ std::vector<D2D1_RECT_F> seen;
+ for(auto& b:btns){
+  if(!b.on){Check(b.u0==b.u1,"hidden button reserves no space");continue;}
+  auto r=d.ButtonRect(b.kind);
+  Check(r.left>=0 && r.top>=0 && r.right<=d.winW && r.bottom<=d.winH,"small buttons stay inside dock window");
+  Check(std::min(r.right-r.left,r.bottom-r.top)>=22*d.scale-1,"small buttons keep a comfortable click size");
+  Check(b.kind==Dock::HitNet||b.kind==Dock::HitVol||b.u0>=d.sensU1,"utility buttons follow the sensor cell");
+  for(auto& o:seen){
+   float ix=std::min(r.right,o.right)-std::max(r.left,o.left),iy=std::min(r.bottom,o.bottom)-std::max(r.top,o.top);
+   Check(ix<=0.5f||iy<=0.5f,"small buttons never overlap");
+  }
+  seen.push_back(r);
   for(float x:{0.15f,0.5f,0.85f})for(float y:{0.15f,0.5f,0.85f}){
    POINT local={(LONG)lerpf(r.left,r.right,x),(LONG)lerpf(r.top,r.bottom,y)};
    float u,v;d.ClientToUV(local.x,local.y,u,v);
-   Check(d.HitTestUV(u,v).kind==kind,"network and volume keep separate click regions across each cell");
-   Check(PtInRect(&d.curRegion,local)!=0,"connectivity cell remains in active input region");
+   Check(d.HitTestUV(u,v).kind==b.kind,"small button drawing matches its click target across the cell");
+   Check(PtInRect(&d.curRegion,local)!=0,"small button remains in active input region");
   }
  }
- if(g_settings.showDesktopButton){
-  auto px=d.W((d.desktopU0+d.desktopU1)/2,d.margin+d.barThick/2-d.hideOff);
-  float u,v;d.ClientToUV((int)px.x,(int)px.y,u,v);
-  Check(d.HitTestUV(u,v).kind==Dock::HitDesktop,"desktop button drawing matches its click target");
-  Check(d.desktopU0>=d.sensU1 && d.desktopU1<=d.barU1,"desktop button does not overlap sensor cell or escape dock");
-  POINT local={(LONG)px.x,(LONG)px.y};
-  Check(PtInRect(&d.curRegion,local)!=0,"desktop button remains inside active input region");
- }else Check(d.desktopU0==d.desktopU1,"disabled desktop button reserves no space");
  if(g_settings.showOledButton){
-  auto px=d.W((d.oledU0+d.oledU1)/2,d.margin+d.barThick/2-d.hideOff);
-  float u,v;d.ClientToUV((int)px.x,(int)px.y,u,v);
-  Check(d.HitTestUV(u,v).kind==Dock::HitOled,"OLED button drawing matches its click target");
-  Check(d.oledU0>=d.desktopU1 && d.oledU1<=d.settingsU0,"OLED button sits between desktop and settings buttons");
   int before=oledActions;d.Click({Dock::HitOled,-1});d.Click({Dock::HitOled,-1});
   Check(oledActions-before==2 && !oledOn,"OLED button toggles on and back off");
- }else Check(d.oledU0==d.oledU1,"hidden OLED button reserves no space");
- Check(d.settingsU0>=d.oledU1 && d.settingsU1<=d.barU1,"settings button is at the end without overlapping other controls");
- Check(d.settingsU1-d.settingsU0>=32*d.scale-0.1f,"settings button retains its minimum target width in crowded layouts");
- for(float along:{0.05f,0.5f,0.95f})for(float across:{0.1f,0.5f,0.9f}){
-  auto px=d.W(lerpf(d.settingsU0,d.settingsU1,along),d.margin+d.barThick*across-d.hideOff);
-  float u,v;d.ClientToUV((int)px.x,(int)px.y,u,v);
-  Check(d.HitTestUV(u,v).kind==Dock::HitSettings,"settings cell is clickable around the gear, not just at its center");
-  POINT local={(LONG)px.x,(LONG)px.y};Check(PtInRect(&d.curRegion,local)!=0,"settings target stays in active input region");
  }
- Check(d.HitTestUV((d.settingsU1+d.barU1)*0.5f,d.margin+d.barThick*0.5f-d.hideOff).kind==Dock::HitSettings,
-       "dock-end padding also opens settings");
+ if(g_settings.showThemeButton){
+  int before=themeActions;bool was=themeLight;d.Click({Dock::HitTheme,-1});d.Click({Dock::HitTheme,-1});
+  Check(themeActions-before==2 && themeLight==was,"theme button flips the mode and back");
+ }
+ Check(d.settingsU1-d.settingsU0>=32*d.scale-0.1f,"settings button retains its minimum target width in crowded layouts");
+ {
+  auto r=d.ButtonRect(Dock::HitSettings,true);
+  POINT local={(LONG)((r.right+r.left)/2),(LONG)((r.top+r.bottom)/2)};
+  Check(PtInRect(&d.curRegion,local)!=0,"settings target stays in active input region");
+ }
+ {
+  // the end padding beside the gear (in the gear's half when it shares a cell)
+  auto pr=d.ButtonRect(Dock::HitSettings,true);
+  auto pe=d.W((d.settingsU1+d.barU1)*0.5f,d.margin+d.barThick*0.5f-d.hideOff);
+  POINT pp=IsVertical(g_settings.edge)?POINT{(LONG)((pr.left+pr.right)*0.5f),(LONG)pe.y}:POINT{(LONG)pe.x,(LONG)((pr.top+pr.bottom)*0.5f)};
+  float u,v;d.ClientToUV(pp.x,pp.y,u,v);
+  Check(d.HitTestUV(u,v).kind==Dock::HitSettings,"dock-end padding also opens settings");
+ }
  Check(d.curRegion.left>=0 && d.curRegion.top>=0 && d.curRegion.right<=d.winW && d.curRegion.bottom<=d.winH,"input region stays inside its window");
  Check(d.barU0>=-1 && d.barU1<=d.len+1,"glass bar stays inside monitor edge");
 }
@@ -314,12 +329,12 @@ static void OptionsTests(Dock& d) {
  d.Click({Dock::HitDesktop,-1}); // stubbed Shell action: never minimizes real windows
  Check(desktopActions-before==(g_settings.showDesktopButton?1:0),"desktop button routes exactly one Shell action only when enabled");
  if(g_settings.showDesktopButton){
-  auto p=d.ScreenPointUV((d.desktopU0+d.desktopU1)/2,d.margin+d.barThick/2);
+  auto br=d.ButtonRect(Dock::HitDesktop);POINT p={d.winX+(LONG)((br.left+br.right)*0.5f),d.winY+(LONG)((br.top+br.bottom)*0.5f)};
   Advance(d,p,0.8);
   Check(d.hoverKind==Dock::HitDesktop && d.reveal.target==1,"desktop button stays reachable with dock visible");
   Check(d.panelAlpha.target==0,"desktop hover does not open sensor panel");
  }
- auto settingsPoint=d.ScreenPointUV((d.settingsU0+d.settingsU1)/2,d.margin+d.barThick/2);
+ auto sr=d.ButtonRect(Dock::HitSettings);POINT settingsPoint={d.winX+(LONG)((sr.left+sr.right)*0.5f),d.winY+(LONG)((sr.top+sr.bottom)*0.5f)};
  Advance(d,settingsPoint,0.8);
  Check(d.hoverKind==Dock::HitSettings && d.reveal.target==1,"gear remains reachable after leaving magnified apps");
  Check(d.panelAlpha.target==0,"settings hover does not open the sensor panel");
@@ -327,7 +342,7 @@ static void OptionsTests(Dock& d) {
  d.Click({Dock::HitSettings,-1}); // popup display is intercepted; no real menu or focus changes
  Check(settingsMenus==menuBefore+1 && desktopActions==desktopBefore,"gear click opens the existing settings menu, not the desktop action");
  for(auto kind:{Dock::HitNet,Dock::HitVol}){
-  auto r=d.ConnectivityRect(kind);
+  auto r=d.ButtonRect(kind);
   POINT p={d.winX+(LONG)((r.left+r.right)*0.5f),d.winY+(LONG)((r.top+r.bottom)*0.5f)};
   Advance(d,p,0.8);
   Check(d.hoverKind==kind && d.reveal.target==1,"connectivity hover selects its own tooltip and keeps dock visible");
@@ -494,7 +509,7 @@ int wmain(int argc,wchar_t** argv) {
  for(int spacing=0;spacing<3;++spacing)for(bool desktop:{false,true})for(bool crowded:{false,true}){
   ++cases;caseFailures=0;
   std::ostringstream label;label<<"options "<<monitor.name<<" edge="<<edge<<" clock="<<clock<<" spacing="<<spacing<<" desktop="<<desktop<<" crowded="<<crowded;caseLabel=label.str();
-  g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.clockSize=clock;g_settings.iconSpacing=spacing;g_settings.showDesktopButton=desktop;g_settings.showOledButton=((edge+clock+spacing)&1)!=0;
+  g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.clockSize=clock;g_settings.iconSpacing=spacing;g_settings.showDesktopButton=desktop;g_settings.showOledButton=((edge+clock+spacing)&1)!=0;g_settings.showThemeButton=((edge+spacing)&1)==0;
   g_settings.iconSize=crowded?54.f:36.f;g_settings.magnification=crowded?2.1f:1.7f;
   Apps(crowded?40:12);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);OptionsTests(d);SweepTests(d);DragSpacingTests(d);
   report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";

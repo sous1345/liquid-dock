@@ -7,6 +7,7 @@
 #include <shellapi.h>
 #include <d2d1effects.h>
 #include "oled.h"
+#include "theme.h"
 
 extern HWND g_mainWnd;
 constexpr UINT WM_APP_REBUILD = WM_APP + 1;
@@ -254,16 +255,28 @@ Dock::LayoutMetrics Dock::MeasureMetrics(float fitFactor) {
     m.separator = 1 + m.gap;
     const float minButton = 24 * scale;
     m.trayButton = m.icon * 0.45f;
+    // pair the small buttons while half the bar still makes a comfortable target
+    m.stack = m.thickness * 0.5f >= 22 * scale;
     m.network = m.volume = std::max(m.icon * 0.55f, minButton);
-    m.connectivity = vert ? std::max(m.network, m.volume) : m.network + m.volume;
+    m.connectivity = m.stack ? std::max(m.network, m.volume) : m.network + m.volume;
     m.clock = vert ? std::max(m.icon * 0.8f, time.height + 8 * scale)
                    : std::max(time.width, date.width) + 12 * scale;
     m.sensor = vert ? m.icon * 1.3f
                     : TextWidth(g_gfx.fmtClockSmall.Get(), L"CPU 100°") + 16 * scale;
     m.desktop = g_settings.showDesktopButton ? std::max(m.icon * 0.55f, minButton) : 0;
+    m.themeBtn = g_settings.showThemeButton ? std::max(m.icon * 0.55f, minButton) : 0;
     m.oled = g_settings.showOledButton ? std::max(m.icon * 0.55f, minButton) : 0;
     // Always available, with a generous cell independent of crowded app icons.
     m.settings = std::max(m.icon * 0.65f, 32 * scale);
+    m.utilities = 0;
+    float pending = -1;   // width of a button still waiting for its partner
+    for (float w : { m.desktop, m.themeBtn, m.oled, m.settings }) {
+        if (w <= 0) continue;
+        if (!m.stack) m.utilities += w;
+        else if (pending < 0) pending = w;
+        else { m.utilities += std::max(pending, w); pending = -1; }
+    }
+    if (pending >= 0) m.utilities += pending;
     return m;
 }
 
@@ -371,15 +384,33 @@ void Dock::Layout(double) {
     x += trailingGap.x * unit;
     sepU = x; x += metrics.separator;
     trayU0 = x; trayU1 = x + metrics.trayButton;
-    netU0 = trayU1; netU1 = netU0 + metrics.network;
-    volU0 = IsVertical(g_settings.edge) ? netU0 : netU1;
-    volU1 = volU0 + metrics.volume;
+    stackButtons = metrics.stack;
+    netU0 = trayU1;
+    if (stackButtons) {
+        netU1 = netU0 + metrics.connectivity; volU0 = netU0; volU1 = netU1; netHalf = 0; volHalf = 1;
+    } else {
+        netU1 = netU0 + metrics.network; volU0 = netU1; volU1 = volU0 + metrics.volume; netHalf = volHalf = -1;
+    }
     clkU0 = volU1; clkU1 = clkU0 + metrics.clock;
     sensU0 = clkU1; sensU1 = sensU0 + metrics.sensor;
-    desktopU0 = sensU1; desktopU1 = desktopU0 + metrics.desktop;
-    oledU0 = desktopU1; oledU1 = oledU0 + metrics.oled;
-    settingsU0 = oledU1; settingsU1 = settingsU0 + metrics.settings;
-    barU0 = start; barU1 = settingsU1 + pad;
+    // utility buttons: in order, two to a cell when stacking (an odd one keeps a whole cell)
+    struct Util { float w; float* u0; float* u1; int* half; } utils[] = {
+        { metrics.desktop, &desktopU0, &desktopU1, &desktopHalf }, { metrics.themeBtn, &themeU0, &themeU1, &themeHalf },
+        { metrics.oled, &oledU0, &oledU1, &oledHalf }, { metrics.settings, &settingsU0, &settingsU1, &settingsHalf } };
+    x = sensU1;
+    Util* waiting = nullptr;
+    for (auto& b : utils) {
+        *b.half = -1;
+        if (b.w <= 0) { *b.u0 = *b.u1 = x; continue; }
+        if (!stackButtons) { *b.u0 = x; *b.u1 = x += b.w; continue; }
+        if (!waiting) { waiting = &b; *b.u0 = x; *b.u1 = x + b.w; continue; }
+        float cell = std::max(waiting->w, b.w);
+        *waiting->u1 = x + cell; *waiting->half = 0;
+        *b.u0 = x; *b.u1 = x + cell; *b.half = 1;
+        x += cell; waiting = nullptr;
+    }
+    if (waiting) x = *waiting->u1;
+    barU0 = start; barU1 = x + pad;
 }
 
 POINT Dock::ScreenPointUV(float u, float v) const {
@@ -427,15 +458,25 @@ float Dock::TextWidth(IDWriteTextFormat* f, const std::wstring& s) {
     return TextSize(f, s).width;
 }
 
-D2D1_RECT_F Dock::ConnectivityRect(HitKind kind) const {
-    const bool network = kind == HitNet;
-    auto r = RectUV(network ? netU0 : volU0, network ? netU1 : volU1,
-                    margin - hideOff, margin + barThick - hideOff);
-    if (IsVertical(g_settings.edge)) {
-        // Split in screen coordinates so network stays left and volume stays
-        // right on both the left and right screen edges.
-        float mid = (r.left + r.right) * 0.5f;
-        if (network) r.right = mid; else r.left = mid;
+D2D1_RECT_F Dock::ButtonRect(HitKind kind, bool hit) const {
+    float u0 = 0, u1 = 0; int half = -1;
+    switch (kind) {
+    case HitNet:      u0 = netU0; u1 = netU1; half = netHalf; break;
+    case HitVol:      u0 = volU0; u1 = volU1; half = volHalf; break;
+    case HitDesktop:  u0 = desktopU0; u1 = desktopU1; half = desktopHalf; break;
+    case HitTheme:    u0 = themeU0; u1 = themeU1; half = themeHalf; break;
+    case HitOled:     u0 = oledU0; u1 = oledU1; half = oledHalf; break;
+    case HitSettings: u0 = settingsU0; u1 = settingsU1; half = settingsHalf; break;
+    default: return {};
+    }
+    if (u1 <= u0) return {};
+    if (hit && u1 >= settingsU1 - 0.5f) u1 = std::max(u1, barU1);   // the last cell also takes clicks on the end padding
+    auto r = RectUV(u0, u1, margin - hideOff, margin + barThick - hideOff);
+    if (half >= 0) {
+        // Split in screen coordinates: the first button is left (side docks) or on top
+        // (top and bottom docks) on every edge.
+        if (IsVertical(g_settings.edge)) { float mid = (r.left + r.right) * 0.5f; (half ? r.left : r.right) = mid; }
+        else { float mid = (r.top + r.bottom) * 0.5f; (half ? r.top : r.bottom) = mid; }
     }
     return r;
 }
@@ -458,8 +499,10 @@ Dock::Hit Dock::HitTestUV(float u, float v) {
     }
     if (v < vb0 - 4 || v > vb1) return h;
     const auto point = W(u, v);
-    for (HitKind kind : { HitNet, HitVol }) {
-        auto r = ConnectivityRect(kind);
+    for (HitKind kind : { HitNet, HitVol, HitDesktop, HitTheme, HitOled, HitSettings }) {
+        if ((kind == HitDesktop && !g_settings.showDesktopButton) || (kind == HitTheme && !g_settings.showThemeButton) ||
+            (kind == HitOled && !g_settings.showOledButton)) continue;
+        auto r = ButtonRect(kind, true);
         if (point.x >= r.left && point.x < r.right && point.y >= r.top && point.y < r.bottom) {
             h.kind = kind; return h;
         }
@@ -467,9 +510,6 @@ Dock::Hit Dock::HitTestUV(float u, float v) {
     if (u >= trayU0 && u < trayU1) h.kind = HitTray;
     else if (u >= clkU0 && u < clkU1) h.kind = HitClock;
     else if (u >= sensU0 && u < sensU1) h.kind = HitSensor;
-    else if (g_settings.showDesktopButton && u >= desktopU0 && u < desktopU1) h.kind = HitDesktop;
-    else if (g_settings.showOledButton && u >= oledU0 && u < oledU1) h.kind = HitOled;
-    else if (u >= settingsU0 && u <= barU1) h.kind = HitSettings;
     else h.kind = HitBar;
     return h;
 }
@@ -751,6 +791,9 @@ void Dock::Update(double now, float dt, POINT cursor) {
     } else if (hoverKind == HitDesktop) {
         tip = L"바탕화면 보기 / 창 복원";
         tooltipU = (desktopU0 + desktopU1) * 0.5f; tooltipV = margin + barThick + 8 * scale - hideOff;
+    } else if (hoverKind == HitTheme) {
+        tip = theme::IsLight() ? L"다크 모드로 전환" : L"라이트 모드로 전환";
+        tooltipU = (themeU0 + themeU1) * 0.5f; tooltipV = margin + barThick + 8 * scale - hideOff;
     } else if (hoverKind == HitOled) {
         tip = oled::Active() ? L"OLED 모드 끄기" : L"OLED 모드 켜기 (검은 배경 · 아이콘 숨김)";
         tooltipU = (oledU0 + oledU1) * 0.5f; tooltipV = margin + barThick + 8 * scale - hideOff;
@@ -1216,10 +1259,10 @@ void Dock::Render() {
         auto hover = [&](HitKind k, float a0, float a1) {
             if (hoverKind != k) return;
             auto r = RectUV(a0 + 1, a1 - 1, v0 + pad * 0.6f, v1 - pad * 0.6f);
-            if (k == HitNet || k == HitVol) {
-                r = ConnectivityRect(k);
-                r.left += 2 * scale; r.right -= 2 * scale;
-                r.top += 2 * scale; r.bottom -= 2 * scale;
+            if (k == HitNet || k == HitVol || k == HitDesktop || k == HitTheme || k == HitOled || k == HitSettings) {
+                r = ButtonRect(k);
+                float inset = (stackButtons ? 1.5f : 2.0f) * scale;
+                r.left += inset; r.right -= inset; r.top += inset; r.bottom -= inset;
             }
             float ink = InkAt((a0 + a1) * 0.5f);
             brush->SetColor(D2D1::ColorF(1 - ink, 1 - ink, 1 - ink, lerpf(0.16f, 0.08f, ink) * vis));
@@ -1227,8 +1270,9 @@ void Dock::Render() {
         };
         hover(HitTray, trayU0, trayU1); hover(HitNet, netU0, netU1); hover(HitVol, volU0, volU1); hover(HitClock, clkU0, clkU1); hover(HitSensor, sensU0, sensU1);
         if (g_settings.showDesktopButton) hover(HitDesktop, desktopU0, desktopU1);
+        if (g_settings.showThemeButton) hover(HitTheme, themeU0, themeU1);
         if (g_settings.showOledButton) hover(HitOled, oledU0, oledU1);
-        hover(HitSettings, settingsU0, barU1);
+        hover(HitSettings, settingsU0, settingsU1);
         DrawSensorCell(v0, v1, vis);
 
         auto shadowText = [&](const std::wstring& t, IDWriteTextFormat* f, D2D1_RECT_F r, float u, float a) {
@@ -1247,9 +1291,17 @@ void Dock::Render() {
         const wchar_t* chevG = g_settings.edge == Edge::Bottom ? L"" : g_settings.edge == Edge::Top ? L""
                              : g_settings.edge == Edge::Left ? L"" : L"";
         shadowText(chevG, g_gfx.fmtGlyph.Get(), RectUV(trayU0, trayU1, v0, v1), (trayU0 + trayU1) / 2, vis * 0.85f);
-        shadowText(netG, g_gfx.fmtGlyph.Get(), ConnectivityRect(HitNet), (netU0 + netU1) / 2, vis);
-        shadowText(volG, g_gfx.fmtGlyph.Get(), ConnectivityRect(HitVol), (volU0 + volU1) / 2, vis);
-        shadowText(L"\uE713", g_gfx.fmtGlyph.Get(), RectUV(settingsU0, settingsU1, v0, v1), (settingsU0 + settingsU1) / 2, vis);
+        // glyph buttons shrink a little when two share a cell
+        auto glyph = [&](const wchar_t* t, HitKind k, float u) {
+            auto r = ButtonRect(k);
+            float f = ButtonIconScale();
+            if (f != 1) dc->SetTransform(D2D1::Matrix3x2F::Scale(f, f, { (r.left + r.right) * 0.5f, (r.top + r.bottom) * 0.5f }));
+            shadowText(t, g_gfx.fmtGlyph.Get(), r, u, vis);
+            dc->SetTransform(D2D1::Matrix3x2F::Identity());
+        };
+        glyph(netG, HitNet, (netU0 + netU1) / 2);
+        glyph(volG, HitVol, (volU0 + volU1) / 2);
+        glyph(L"\uE713", HitSettings, (settingsU0 + settingsU1) / 2);
         float cu = (clkU0 + clkU1) / 2;
         if (!IsVertical(g_settings.edge)) {
             auto r = RectUV(clkU0, clkU1, v0, v1);
@@ -1265,7 +1317,9 @@ void Dock::Render() {
             // A desktop outline, kept upright on all four edges. Drawing and
             // hit testing use the same cell; the entire cell is clickable.
             float du = (desktopU0 + desktopU1) * 0.5f;
-            auto p = W(du, (v0 + v1) * 0.5f);
+            auto br = ButtonRect(HitDesktop);
+            D2D1_POINT_2F p = { (br.left + br.right) * 0.5f, (br.top + br.bottom) * 0.5f };
+            float scale = this->scale * ButtonIconScale();
             brush->SetColor(Ink(du, vis));
             auto screen = D2D1::RectF(p.x - 8 * scale, p.y - 6 * scale,
                                       p.x + 8 * scale, p.y + 4 * scale);
@@ -1273,6 +1327,7 @@ void Dock::Render() {
             dc->DrawLine({ p.x, p.y + 4 * scale }, { p.x, p.y + 7 * scale }, brush.Get(), 1.4f * scale);
             dc->DrawLine({ p.x - 4 * scale, p.y + 7 * scale }, { p.x + 4 * scale, p.y + 7 * scale }, brush.Get(), 1.4f * scale);
         }
+        if (g_settings.showThemeButton) DrawThemeButton(v0, v1, vis);
         if (g_settings.showOledButton) DrawOledButton(v0, v1, vis);
     }
 
@@ -1380,6 +1435,11 @@ void Dock::Click(const Hit& h) {
     case HitClock: nativetray::OpenCalendar(); break;
     case HitDesktop:
         if (g_settings.showDesktopButton) nativetray::ToggleDesktop();
+        break;
+    case HitTheme:
+        if (g_settings.showThemeButton && !theme::Toggle())
+            MessageBoxW(hwnd, L"다크/라이트 모드를 바꾸지 못했습니다.", L"Liquid Dock", MB_OK | MB_ICONINFORMATION);
+        dirty = true;
         break;
     case HitOled:
         if (g_settings.showOledButton) ToggleOled();
@@ -1519,11 +1579,13 @@ void Dock::ToggleOled() {
 void Dock::DrawOledButton(float v0, float v1, float vis) {
     auto* dc = g_gfx.dc.Get();
     float ou = (oledU0 + oledU1) * 0.5f;
-    auto p = W(ou, (v0 + v1) * 0.5f);
-    float w = 13 * scale, h = 15 * scale;
+    auto br = ButtonRect(HitOled);
+    D2D1_POINT_2F p = { (br.left + br.right) * 0.5f, (br.top + br.bottom) * 0.5f };
+    float s = scale * ButtonIconScale();
+    float w = 13 * s, h = 15 * s;
     D2D1_RECT_F r = { p.x - w / 2, p.y - h / 2, p.x + w / 2, p.y + h / 2 };
     ComPtr<ID2D1RoundedRectangleGeometry> shape;
-    if (FAILED(g_gfx.d2dFactory->CreateRoundedRectangleGeometry({ r, 2.6f * scale, 2.6f * scale }, &shape))) return;
+    if (FAILED(g_gfx.d2dFactory->CreateRoundedRectangleGeometry({ r, 2.6f * s, 2.6f * s }, &shape))) return;
 
     D2D1_COLOR_F c[3];
     if (oled::Active()) {
@@ -1541,6 +1603,43 @@ void Dock::DrawOledButton(float v0, float v1, float vis) {
     dc->SetTransform(D2D1::Matrix3x2F::Skew(-35, 0, p));
     dc->FillGeometry(shape.Get(), fill.Get());
     dc->SetTransform(D2D1::Matrix3x2F::Identity());
+}
+
+// Design 2 hung upside down: base and cord at the top, the round glass below. Dark mode: outline;
+// light mode: filled with rays spreading from the glass. Ink colour only.
+void Dock::DrawThemeButton(float v0, float v1, float vis) {
+    auto* dc = g_gfx.dc.Get();
+    float tu = (themeU0 + themeU1) * 0.5f;
+    auto br = ButtonRect(HitTheme);
+    D2D1_POINT_2F p = { (br.left + br.right) * 0.5f, (br.top + br.bottom) * 0.5f };
+    float k = 0.55f * scale * ButtonIconScale();   // drawing units: the glass is 16 units wide
+    auto pt = [&](float x, float y) { return D2D1::Point2F(p.x + x * k, p.y + y * k); };
+    bool lit = theme::IsLight();
+    auto ink = Ink(tu, vis * (lit ? 1.0f : 0.8f));
+    float line = 1.8f * k;
+
+    // glass: circle (0, 2) r 8 with a neck 9 units wide up to y = -7
+    ComPtr<ID2D1PathGeometry> glass;
+    ComPtr<ID2D1GeometrySink> sink;
+    if (FAILED(g_gfx.d2dFactory->CreatePathGeometry(&glass)) || FAILED(glass->Open(&sink))) return;
+    sink->BeginFigure(pt(-4.5f, -7), D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddLine(pt(-4.5f, -4.61f));
+    sink->AddArc({ pt(4.5f, -4.61f), { 8 * k, 8 * k }, 0, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_LARGE });
+    sink->AddLine(pt(4.5f, -7));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    if (FAILED(sink->Close())) return;
+
+    brush->SetColor(ink);
+    dc->DrawLine(pt(0, -10.5f), pt(0, -19), brush.Get(), line);        // cord
+    dc->DrawLine(pt(-3.5f, -10.5f), pt(3.5f, -10.5f), brush.Get(), line);   // base
+    if (lit) {
+        dc->FillGeometry(glass.Get(), brush.Get());
+        const float rays[5][4] = { { 0, 15, 0, 19 }, { -9.2f, 11.2f, -12, 14 }, { 9.2f, 11.2f, 12, 14 },
+                                   { -12, 2, -16, 2 }, { 12, 2, 16, 2 } };
+        for (auto& r : rays) dc->DrawLine(pt(r[0], r[1]), pt(r[2], r[3]), brush.Get(), line);
+    } else {
+        dc->DrawGeometry(glass.Get(), brush.Get(), line);
+    }
 }
 
 void Dock::ShowDockMenu() {
@@ -1581,6 +1680,7 @@ void Dock::ShowDockMenu() {
     AppendMenuW(om, chk(g_settings.oledOneMonitor), 85, L"이 모니터만");
     AppendMenuW(om, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(om, chk(g_settings.showOledButton), 86, L"독에 OLED 버튼 표시");
+    AppendMenuW(m, chk(g_settings.showThemeButton), 87, L"다크/라이트 전환 버튼");
     AppendMenuW(m, MF_POPUP | (oled::Active() ? MF_CHECKED : 0), (UINT_PTR)om, L"OLED 모드");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)mg, L"확대 효과");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)gl, L"유리 질감");
@@ -1623,6 +1723,7 @@ void Dock::ShowDockMenu() {
     case 82: g_settings.showDesktopButton = !g_settings.showDesktopButton; rebuild = true; break;
     case 83: ToggleOled(); break;
     case 84: case 85: g_settings.oledOneMonitor = cmd == 85; break;
+    case 87: g_settings.showThemeButton = !g_settings.showThemeButton; rebuild = true; break;
     case 86: g_settings.showOledButton = !g_settings.showOledButton; rebuild = true; break;
     case 90: case 91: case 92: g_settings.iconSpacing = cmd - 90; rebuild = true; break;
     }
