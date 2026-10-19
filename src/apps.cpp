@@ -293,6 +293,8 @@ void AppModel::ReloadIcons() {
     structureVersion++;
 }
 
+bool g_demoMode = false;
+
 void AppModel::Init() {
     LoadPins();
     MigratePins();
@@ -578,6 +580,7 @@ void AppModel::Refresh() {
         if (!match && !wc.exe.empty())
             for (auto& a : items)
                 if (a->exe == wc.exe && (a->aumid.empty() || wc.aumid.empty())) { match = a; break; }
+        if (!match && g_demoMode) continue;
         if (!match) {
             match = NewItem();
             match->aumid = wc.aumid;

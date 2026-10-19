@@ -12,4 +12,6 @@ namespace oled {
     bool Disable();
     // after an Explorer restart or at startup: hide the desktop icons again if the mode is on
     void Reapply();
+    // the desktop's own "show desktop icons" switch (also used for recordings); false on failure
+    bool SetDesktopIconsVisible(bool visible);
 }

@@ -778,6 +778,16 @@ LRESULT CALLBACK Proc(HWND h, UINT m, WPARAM w, LPARAM l) {
 }   // namespace
 
 bool IsOpen() { return g_wnd != nullptr; }
+
+void PlaceBottomRight() {
+    if (!g_wnd) return;
+    MONITORINFO mi = { sizeof(mi) }; GetMonitorInfoW(MonitorFromWindow(g_wnd, MONITOR_DEFAULTTOPRIMARY), &mi);
+    RECT r; GetWindowRect(g_wnd, &r);
+    int w = r.right - r.left, h = r.bottom - r.top;
+    SetWindowPos(g_wnd, nullptr, mi.rcMonitor.right - w - 24, mi.rcMonitor.bottom - h - 24, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    POINT o = { 0, 0 }; ClientToScreen(g_wnd, &o);
+    Log(L"settings placed: client origin %d,%d content dpi %.1f", o.x, o.y, g_dpi);
+}
 void Close() { if (g_wnd) DestroyWindow(g_wnd); }
 bool PreTranslate(MSG* msg) {
     if (!g_wnd || msg->hwnd != g_wnd || msg->message != WM_KEYDOWN || msg->wParam != VK_ESCAPE) return false;

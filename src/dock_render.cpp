@@ -508,6 +508,10 @@ void Dock::SaveSnapshot() {
     Log(L"snapshot saved; layout (screen) edge=%d win=%d,%d bar=%.0f-%.0f apps-end=%.0f sens=%.0f-%.0f thick=%.0f margin=%.0f",
         (int)g_settings.edge, winX, winY, barU0, barU1, sepU, cells[HitSensor].u0, cells[HitSensor].u1, barThick, margin);
     for (auto& s : slots) if (s.app && s.app->exe.find(L"kakaotalk") != std::wstring::npos) Log(L"kakao u=%.0f", s.u);
+    for (int i = 0; i < kButtonCount; ++i) {   // where each button is on screen (recordings script their clicks)
+        auto r = ButtonRect((ButtonId)i);
+        if (r.right > r.left) Log(L"button %S at %.0f,%.0f", Info((ButtonId)i).key, winX + (r.left + r.right) / 2, winY + (r.top + r.bottom) / 2);
+    }
 }
 
 void Dock::DrawShadowText(const std::wstring& t, IDWriteTextFormat* f, D2D1_RECT_F r, float u, float a) {

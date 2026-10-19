@@ -4,7 +4,7 @@
 
 static constexpr double kRecFps = 30.0;
 
-void Dock::StartRecording(RECT crop, float outScale) {
+void Dock::StartRecording(RECT crop, float outScale, bool append) {
     if (recording) return;
     RECT full = { 0, 0, mon.right - mon.left, mon.bottom - mon.top };
     IntersectRect(&crop, &crop, &full);
@@ -29,7 +29,9 @@ void Dock::StartRecording(RECT crop, float outScale) {
 
     std::wstring dir = AppDataDir() + L"\\rec";
     CreateDirectoryW(dir.c_str(), nullptr);
-    _wfopen_s(&recFile, (dir + L"\\frames.raw").c_str(), L"wb");
+    _wfopen_s(&recFile, (dir + L"\\frames.raw").c_str(), append ? L"ab" : L"wb");
+    carryRecording = true; carryCrop = crop; carryScale = outScale;
+    if (!append) carryFrames = 0;
     if (!recFile) return;
     float zero[4] = {};
     g_gfx.ctx->ClearRenderTargetView(dockFrame.rtv.Get(), zero);
@@ -93,10 +95,23 @@ void Dock::RecordTick(double now) {
     recSlot++;
 }
 
-void Dock::StopRecording() {
+// The window is going away while recording (docks rebuilt): close the file, keep the count, and let
+// the new primary dock append (BuildDocks).
+void Dock::SuspendRecording() {
     if (!recording) return;
     recording = false;
     if (recFile) { fclose(recFile); recFile = nullptr; }
+    carryFrames += recFrames;
+    dockFrame = {}; fullTex = {}; recRT = {}; recTarget.Reset();
+    for (auto& st : recStage) st.Reset();
+}
+
+void Dock::StopRecording() {
+    if (!recording) return;
+    recording = false;
+    carryRecording = false;
+    if (recFile) { fclose(recFile); recFile = nullptr; }
+    recFrames += carryFrames; carryFrames = 0;
     FILE* f = nullptr;
     _wfopen_s(&f, (AppDataDir() + L"\\rec\\info.txt").c_str(), L"w");
     if (f) { fprintf(f, "%d %d %d %d\n", recW, recH, (int)kRecFps, recFrames); fclose(f); }

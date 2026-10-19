@@ -25,6 +25,7 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 Dock::Dock(HMONITOR m, int i, bool p) : monitor(m), index(i), primary(p) {}
 
 Dock::~Dock() {
+    SuspendRecording();
     UpdateAppBar(false);
     windowPreview.Dismiss();
     capture.Stop();

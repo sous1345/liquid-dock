@@ -23,7 +23,7 @@ rc /nologo /fo build\dock.res src\dock.rc || exit /b 1
 cl %CF% /Fobuild\ /Febuild\LiquidDock.exe src\*.cpp build\dock.res ^
   /link %LF% d3d11.lib dxgi.lib d2d1.lib dwrite.lib dcomp.lib d3dcompiler.lib dxguid.lib windowsapp.lib ^
   shell32.lib ole32.lib oleaut32.lib user32.lib gdi32.lib dwmapi.lib shlwapi.lib propsys.lib version.lib ^
-  iphlpapi.lib advapi32.lib shcore.lib windowscodecs.lib uuid.lib pdh.lib || exit /b 1
+  iphlpapi.lib advapi32.lib shcore.lib windowscodecs.lib uuid.lib pdh.lib psapi.lib || exit /b 1
 
 rem ---- optional elevated sensor helper (embeds the PawnIO modules); skipped while it is running
 tasklist /FI "IMAGENAME eq LiquidDockSensors.exe" | find /I "LiquidDockSensors.exe" >nul && (

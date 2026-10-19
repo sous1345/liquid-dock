@@ -9,6 +9,8 @@
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <thread>
+#include <tlhelp32.h>
+#include <psapi.h>
 #include "oled.h"
 #include "buttons.h"
 #include "settings_window.h"
@@ -19,6 +21,7 @@ HWND g_mainWnd = nullptr;
 static std::vector<std::unique_ptr<Dock>> g_docks;
 static UINT g_msgShellHook = 0, g_msgTaskbarCreated = 0;
 static bool g_running = true;
+static int g_enforceCount = 0;   // taskbar re-hides done on the UI thread (--profile)
 static double g_rebuildAt = 0;
 static bool g_deviceResetRequested = false;
 static double g_nextDeviceRetry = 0;
@@ -45,6 +48,8 @@ static void BuildDocks() {
         else Log(L"dock create failed for monitor %d", i - 1);
     }
     Log(L"docks: %d", (int)g_docks.size());
+    if (Dock::carryRecording)   // a recording in progress continues on the new primary dock
+        for (auto& d : g_docks) if (d->primary) d->StartRecording(Dock::carryCrop, Dock::carryScale, true);
     // A replacement must exist on every monitor before hiding all native taskbars.
     g_docksReady = !mons.empty() && g_docks.size() == mons.size();
     if (!g_docksReady) g_docks.clear();
@@ -155,6 +160,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         for (auto& d : g_docks) if (!d->Relayout()) { g_rebuildAt = NowSeconds(); break; }
         return 0;
     case WM_APP + 30:   // from the enforcer thread: a new taskbar needs its buttons cached here first
+        ++g_enforceCount;
         g_taskbar.Enforce(true);
         return 0;
     case WM_APP_AUTOSTART:
@@ -178,6 +184,26 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             d->StartRecording(crop, 0.5f);
         }
         return 0;
+    case WM_APP + 29:   // record a close-up: 2200 x 760 px around the middle of the edge, at 0.875
+        for (auto& d : g_docks) if (d->primary) {
+            MONITORINFO mi = { sizeof(mi) }; GetMonitorInfoW(d->monitor, &mi);
+            int w = mi.rcMonitor.right - mi.rcMonitor.left, hgt = mi.rcMonitor.bottom - mi.rcMonitor.top;
+            RECT crop = { w / 2 - 1100, hgt - 760, w / 2 + 1100, hgt };
+            switch (g_settings.edge) {
+            case Edge::Top:   crop = { w / 2 - 1100, 0, w / 2 + 1100, 760 }; break;
+            case Edge::Left:  crop = { 0, hgt / 2 - 1100, 760, hgt / 2 + 1100 }; break;
+            case Edge::Right: crop = { w - 760, hgt / 2 - 1100, w, hgt / 2 + 1100 }; break;
+            default: break;
+            }
+            d->StartRecording(crop, 0.875f);
+        }
+        return 0;
+    case WM_APP + 31:   // record the whole primary monitor at half size
+        for (auto& d : g_docks) if (d->primary) {
+            MONITORINFO mi = { sizeof(mi) }; GetMonitorInfoW(d->monitor, &mi);
+            d->StartRecording({ 0, 0, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top }, 0.5f);
+        }
+        return 0;
     case WM_APP + 18: for (auto& d : g_docks) d->StopRecording(); return 0;
     case WM_APP + 19: {   // simulate a KakaoTalk notification
         std::shared_ptr<AppItem> target;
@@ -196,6 +222,10 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_APP + 23: { POINT p; GetCursorPos(&p); nativetray::OpenVolume(p); return 0; }
     case WM_APP + 24: nativetray::OpenQuickSettings(); return 0;
     case WM_APP + 25: g_deviceResetRequested = true; return 0;   // developer: simulate a GPU reset
+    case WM_APP + 27: case WM_APP + 28: oled::SetDesktopIconsVisible(m == WM_APP + 28); return 0;   // developer (recordings)
+    case WM_APP + 26:   // developer (recordings): settings window in the lower right corner of the primary monitor
+        for (auto& d : g_docks) if (d->primary) { settingswindow::Show(d->monitor); settingswindow::PlaceBottomRight(); }
+        return 0;
     case WM_APP + 15: case WM_APP + 16:
         g_settings.autostart = (m == WM_APP + 15);
         g_settings.Save();
@@ -323,7 +353,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
                                                         { L"--rec-start", WM_APP + 17 }, { L"--rec-stop", WM_APP + 18 }, { L"--debug-bounce", WM_APP + 19 },
                                                         { L"--debug-overflow", WM_APP + 21 }, { L"--debug-calendar", WM_APP + 22 },
                                                         { L"--debug-volume", WM_APP + 23 }, { L"--debug-network", WM_APP + 24 },
-                                                        { L"--debug-device-reset", WM_APP + 25 } };
+                                                        { L"--debug-device-reset", WM_APP + 25 }, { L"--debug-settings", WM_APP + 26 },
+                                                        { L"--debug-icons-hide", WM_APP + 27 }, { L"--debug-icons-show", WM_APP + 28 },
+                                                        { L"--rec-tight", WM_APP + 29 }, { L"--rec-full", WM_APP + 31 } };
     for (auto& d : dbg) {
         if (args.find(d.flag) != std::wstring::npos) {
             if (HWND other = FindWindowW(L"LiquidDockMain", nullptr)) PostMessageW(other, d.msg, 0, 0);
@@ -360,6 +392,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
     SetUnhandledExceptionFilter(CrashHandler);
     EnableThemedMenus();
     g_settings.Load();
+    g_demoMode = args.find(L"--demo") != std::wstring::npos;
     if (!g_gfx.Init()) {
         g_taskbar.Restore();
         MessageBoxW(nullptr, L"GPU 초기화에 실패했습니다.", L"Liquid Dock", MB_ICONERROR);
@@ -396,6 +429,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
     if (welcomeUntil) Dock::debugForceShow = true;
 
     double last = NowSeconds(), nextRestoreTry = 0;
+    // --profile: time spent per part of the loop, logged every 10 s (off otherwise: no cost)
+    const bool profile = args.find(L"--profile") != std::wstring::npos;
+    enum { PMsg, PApps, PFeatures, PSys, PSensors, PUpdate, PRender, PWait, PCount };
+    double prof[PCount] = {}, profStart = NowSeconds(), mark = profStart; int profFrames = 0, profBusy = 0;
+    auto lap = [&](int part) { if (!profile) return; double t = NowSeconds(); prof[part] += t - mark; mark = t; };
     while (g_running) {
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -405,6 +443,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
             DispatchMessageW(&msg);
         }
         if (!g_running) break;
+        lap(PMsg);
         double now = NowSeconds();
         float dt = (float)std::clamp(now - last, 0.0, 0.05);
         last = now;
@@ -431,22 +470,44 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
             nextRestoreTry = now + 1.0;
         }
 
-        g_apps.Tick(now);
-        features::Tick(now);
-        g_sys.Tick(now);
-        g_sensors.Tick(now);
+        mark = NowSeconds();
+        g_apps.Tick(now); lap(PApps);
+        features::Tick(now); lap(PFeatures);
+        g_sys.Tick(now); lap(PSys);
+        g_sensors.Tick(now); lap(PSensors);
 
         POINT c; GetCursorPos(&c);
         bool busy = false;
         for (auto& d : g_docks) {
-            d->Update(now, dt, c);
-            d->Render();
+            d->Update(now, dt, c); lap(PUpdate);
+            d->Render(); lap(PRender);
             d->RecordTick(now);
             busy |= d->Busy();
         }
         g_apps.attentionEvents.clear();
         g_sensors.alertPending = false;
 
+        if (profile) {
+            ++profFrames; profBusy += busy;
+            if (now - profStart >= 10) {
+                double total = now - profStart;
+                Log(L"profile %.0fs frames %d busy %d | ms/s: msg %.2f apps %.2f features %.2f sys %.2f sensors %.2f update %.2f render %.2f wait %.1f",
+                    total, profFrames, profBusy, prof[PMsg] * 1000 / total, prof[PApps] * 1000 / total, prof[PFeatures] * 1000 / total, prof[PSys] * 1000 / total,
+                    prof[PSensors] * 1000 / total, prof[PUpdate] * 1000 / total, prof[PRender] * 1000 / total, prof[PWait] * 1000 / total);
+                {   // what grows over time: threads, handles, memory, taskbar re-hides
+                    DWORD handles = 0; GetProcessHandleCount(GetCurrentProcess(), &handles);
+                    PROCESS_MEMORY_COUNTERS_EX pm = { sizeof(pm) }; GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pm, sizeof(pm));
+                    int threads = 0; HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0); THREADENTRY32 te = { sizeof(te) };
+                    if (snap != INVALID_HANDLE_VALUE) { for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) if (te.th32OwnerProcessID == GetCurrentProcessId()) ++threads; CloseHandle(snap); }
+                    FILETIME a, b, k, u; GetProcessTimes(GetCurrentProcess(), &a, &b, &k, &u);
+                    double cpu = ((((ULONGLONG)k.dwHighDateTime << 32) | k.dwLowDateTime) + (((ULONGLONG)u.dwHighDateTime << 32) | u.dwLowDateTime)) / 1e7;
+                    Log(L"profile state: threads %d handles %lu private %.1f MB cpu-total %.1f s re-hides %d", threads, handles, pm.PrivateUsage / 1048576.0, cpu, g_enforceCount);
+                }
+                for (auto& v : prof) v = 0;
+                profStart = now; profFrames = profBusy = 0;
+            }
+            mark = NowSeconds();
+        }
         if (busy) DwmFlush();
         else {
             // idle: poll the cursor quickly only near a screen edge (where the dock can appear)
@@ -456,6 +517,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
             bool nearEdge = c.x - r.left < 120 || r.right - c.x < 120 || c.y - r.top < 120 || r.bottom - c.y < 120;
             MsgWaitForMultipleObjectsEx(0, nullptr, nearEdge ? 15 : 45, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
+        lap(PWait);
     }
 
     g_docksReady = false;

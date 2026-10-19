@@ -236,6 +236,8 @@ bool Disable() {
     return true;
 }
 
+bool SetDesktopIconsVisible(bool visible) { return SetIconsVisible(visible) >= 0; }
+
 void Reapply() {
     State s = Load();
     if (s.active && s.iconsHidden) SetIconsVisible(false);

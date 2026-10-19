@@ -9,4 +9,5 @@ namespace settingswindow {
     void Close();                  // e.g. before a GPU reset: its swap chain belongs to the old device
     bool IsOpen();
     bool PreTranslate(MSG* msg);   // Esc, from the main loop
+    void PlaceBottomRight();       // developer (recordings): into the lower right corner of its monitor
 }

@@ -59,3 +59,5 @@ private:
 };
 
 extern AppModel g_apps;
+// --demo (recording videos): only the pinned apps; other running apps stay off the dock
+extern bool g_demoMode;
