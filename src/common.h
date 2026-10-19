@@ -63,7 +63,7 @@ struct Settings {
     float iconSize = 44;        // at a 1440 px short screen side; scaled with the screen
     float magnification = 1.7f; // 1 = off
     int   glassStyle = 1;       // 0 clear, 1 normal, 2 frosted
-    std::string trayButtons = "desktop,theme";   // the user's buttons between the sensor cell and settings, in order
+    std::string trayButtons = "desktop,theme,sff";   // the user's buttons between the sensor cell and settings, in order
     // read only from older files (before trayButtons), to build trayButtons once
     bool  showDesktopButton = true, showThemeButton = true, showOledButton = false;
     bool  oledOneMonitor = false;   // black wallpaper only on the monitor whose dock was clicked

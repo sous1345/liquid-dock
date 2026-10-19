@@ -3,7 +3,7 @@
 
 // The small square buttons of the dock's tray. Network and volume sit before the clock, settings
 // is always last; everything in between is the user's choice and order (Settings::trayButtons).
-enum class ButtonId { Network, Volume, Desktop, Theme, Oled, Awake, Screenshot, Quiet, Trash, Downloads, Audio, Settings, Count };
+enum class ButtonId { Network, Volume, Desktop, Theme, Oled, Awake, Screenshot, Quiet, Trash, Downloads, Audio, Sff, Settings, Count };
 constexpr int kButtonCount = (int)ButtonId::Count;
 
 struct ButtonInfo {

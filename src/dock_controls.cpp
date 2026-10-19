@@ -25,6 +25,7 @@ const Dock::SmallButton Dock::kSmallButtons[kButtonCount] = {
     { ButtonId::Trash,        &Dock::TipTrash,      &Dock::ClickTrash,      &Dock::MenuTrash },
     { ButtonId::Downloads,    &Dock::TipDownloads,  &Dock::ClickDownloads,  &Dock::MenuDownloads },
     { ButtonId::Audio,        &Dock::TipAudio,      &Dock::ClickAudio,      &Dock::MenuAudio },
+    { ButtonId::Sff,          &Dock::TipSff,        &Dock::ClickSff,        nullptr },
     { ButtonId::Settings,     &Dock::TipSettings,   &Dock::ClickSettings,   nullptr },
 };
 
@@ -67,6 +68,7 @@ std::wstring Dock::TipAudio() const {
     for (auto& d : audio::Outputs()) if (d.isDefault) return L"출력: " + d.name;
     return L"오디오 장치";
 }
+std::wstring Dock::TipSff() const { return L"SFF 갤러리"; }
 std::wstring Dock::TipSettings() const { return L"설정"; }
 
 // Windows' own tray windows rather than re-implementations
@@ -84,6 +86,7 @@ void Dock::ClickTheme() {
 void Dock::ClickOled() { ToggleOled(); }
 void Dock::ClickAwake() { features::SetAwake(!features::Awake()); dirty = true; }
 void Dock::ClickScreenshot() { OpenUri(L"ms-screenclip:"); }
+void Dock::ClickSff() { OpenUri(L"https://gall.dcinside.com/mgallery/board/lists/?id=sff"); }
 void Dock::ClickQuiet() { features::SetQuiet(features::Quiet(NowSeconds()) ? 0 : kForever); dirty = true; }
 void Dock::ClickTrash() { OpenUri(L"shell:RecycleBinFolder"); }
 void Dock::ClickSettings() { settingswindow::Show(monitor); }

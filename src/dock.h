@@ -88,6 +88,7 @@ private:
     std::wstring TipTrash() const;
     std::wstring TipDownloads() const;
     std::wstring TipAudio() const;
+    std::wstring TipSff() const;
     std::wstring TipSettings() const;
     void ClickNetwork();
     void ClickVolume();
@@ -96,6 +97,7 @@ private:
     void ClickOled();
     void ClickAwake();
     void ClickScreenshot();
+    void ClickSff();
     void ClickQuiet();
     void ClickTrash();
     void ClickDownloads();
@@ -243,8 +245,14 @@ private:
 
 public:
     // built-in screen recorder (normal recorders can't see the dock: it is excluded from capture)
-    void StartRecording(RECT cropMonitorPx, float outScale);
+    void StartRecording(RECT cropMonitorPx, float outScale, bool append = false);
+    // a recording outlives the dock windows being rebuilt (position change): carried over by BuildDocks
+    static inline bool carryRecording = false;
+    static inline RECT carryCrop{};
+    static inline float carryScale = 0.5f;
+    static inline int carryFrames = 0;
     void StopRecording();
+    void SuspendRecording();
     void RecordTick(double now);
     bool Recording() const { return recording; }
 private:

@@ -20,6 +20,7 @@ static const ButtonInfo kInfo[kButtonCount] = {
     { ButtonId::Trash,      "trash",      L"휴지통",            L"파일을 끌어다 놓으면 휴지통으로, 우클릭으로 비우기", false },
     { ButtonId::Downloads,  "downloads",  L"다운로드",          L"최근 받은 파일 목록",                        false },
     { ButtonId::Audio,      "audio",      L"오디오 장치",       L"스피커와 헤드셋 사이를 바로 바꿉니다",       false },
+    { ButtonId::Sff,        "sff",        L"SFF 갤러리",        L"디시인사이드 SFF 마이너 갤러리를 엽니다",    false },
     // always available, with a generous cell independent of crowded app icons
     { ButtonId::Settings,   "settings",   L"설정",              L"Liquid Dock 설정",                           true, 0.65f, 32 },
 };
@@ -108,8 +109,9 @@ bool Quiet(double now) { return now < g_quietUntil; }
 void SetQuiet(double until) { g_quietUntil = until; }
 bool TrashFull() { return g_trashFull; }
 void Tick(double now) {
-    if (now < g_nextTrashPoll) return;
-    g_nextTrashPoll = now + 5;
+    // the Recycle Bin query takes a few milliseconds: only while the trash button is on the dock
+    if (now < g_nextTrashPoll || !HasButton(ButtonId::Trash)) return;
+    g_nextTrashPoll = now + 10;
     SHQUERYRBINFO q = { sizeof(q) };
     if (SUCCEEDED(SHQueryRecycleBinW(nullptr, &q))) g_trashFull = q.i64NumItems > 0;
 }
@@ -177,6 +179,51 @@ struct Pen {
     D2D1_POINT_2F P(float x, float y) const { return { c.x + x * k, c.y + y * k }; }
     void Line(float x0, float y0, float x1, float y1, float w) const { dc->DrawLine(P(x0, y0), P(x1, y1), brush, w * k); }
 };
+
+// The SFF gallery mark (an isometric cube), traced from the gallery cover: outlines in units of half its
+// height, centred on the origin; filled with the alternate rule, so the inner outlines are holes.
+const D2D1_POINT_2F kSff0[] = {
+    {-0.006f,-0.983f}, {-0.112f,-0.961f}, {-0.302f,-0.850f}, {-0.373f,-0.819f}, {-0.432f,-0.780f}, {-0.740f,-0.619f},
+    {-0.858f,-0.546f}, {-0.910f,-0.485f}, {-0.922f,-0.450f}, {-0.930f,-0.367f}, {-0.930f,0.331f}, {-0.922f,0.438f},
+    {-0.905f,0.492f}, {-0.811f,0.574f}, {-0.751f,0.600f}, {-0.692f,0.640f}, {-0.621f,0.670f}, {-0.574f,0.704f},
+    {-0.505f,0.734f}, {-0.314f,0.845f}, {-0.254f,0.870f}, {-0.183f,0.916f}, {-0.077f,0.970f}, {-0.030f,0.983f},
+    {0.030f,0.983f}, {0.077f,0.971f}, {0.822f,0.570f}, {0.893f,0.509f}, {0.910f,0.485f}, {0.930f,0.391f},
+    {0.932f,-0.367f}, {0.920f,-0.462f}, {0.897f,-0.509f}, {0.858f,-0.548f}, {0.750f,-0.615f}, {0.680f,-0.646f},
+    {0.620f,-0.686f}, {0.434f,-0.781f}, {0.243f,-0.892f}, {0.183f,-0.917f}, {0.136f,-0.950f}, {0.077f,-0.973f},
+};
+const D2D1_POINT_2F kSff1[] = {
+    {0.006f,-0.805f}, {-0.041f,-0.797f}, {-0.136f,-0.762f}, {-0.195f,-0.721f}, {-0.290f,-0.675f}, {-0.349f,-0.628f},
+    {-0.361f,-0.604f}, {-0.337f,-0.572f}, {-0.231f,-0.514f}, {-0.195f,-0.503f}, {-0.148f,-0.505f}, {-0.065f,-0.549f},
+    {0.006f,-0.561f}, {0.065f,-0.550f}, {0.136f,-0.508f}, {0.195f,-0.501f}, {0.243f,-0.515f}, {0.349f,-0.577f},
+    {0.365f,-0.604f}, {0.349f,-0.633f}, {0.278f,-0.686f}, {0.207f,-0.718f}, {0.136f,-0.764f},
+};
+const D2D1_POINT_2F kSff2[] = {
+    {-0.550f,-0.523f}, {-0.633f,-0.490f}, {-0.673f,-0.462f}, {-0.707f,-0.414f}, {-0.704f,-0.391f}, {-0.694f,-0.379f},
+    {-0.621f,-0.347f}, {-0.065f,-0.044f}, {-0.030f,-0.035f}, {0.018f,-0.033f}, {0.065f,-0.043f}, {0.538f,-0.297f},
+    {0.692f,-0.375f}, {0.712f,-0.402f}, {0.699f,-0.438f}, {0.657f,-0.479f}, {0.550f,-0.523f}, {0.527f,-0.522f},
+    {0.444f,-0.490f}, {0.254f,-0.378f}, {0.183f,-0.346f}, {0.124f,-0.305f}, {0.006f,-0.268f}, {-0.112f,-0.302f},
+    {-0.183f,-0.349f}, {-0.373f,-0.446f}, {-0.432f,-0.487f}, {-0.527f,-0.522f},
+};
+const D2D1_POINT_2F kSff3[] = {
+    {-0.716f,-0.226f}, {-0.747f,-0.213f}, {-0.759f,-0.189f}, {-0.755f,-0.059f}, {-0.669f,0.018f}, {-0.570f,0.071f},
+    {-0.531f,0.130f}, {-0.521f,0.189f}, {-0.533f,0.237f}, {-0.562f,0.257f}, {-0.621f,0.251f}, {-0.716f,0.210f},
+    {-0.738f,0.213f}, {-0.751f,0.225f}, {-0.757f,0.331f}, {-0.733f,0.402f}, {-0.704f,0.432f}, {-0.586f,0.500f},
+    {-0.515f,0.530f}, {-0.456f,0.570f}, {-0.278f,0.658f}, {-0.077f,0.774f}, {0.018f,0.786f}, {0.089f,0.770f},
+    {0.716f,0.426f}, {0.744f,0.391f}, {0.757f,0.355f}, {0.754f,0.225f}, {0.740f,0.212f}, {0.716f,0.210f},
+    {0.621f,0.254f}, {0.562f,0.256f}, {0.537f,0.237f}, {0.526f,0.166f}, {0.546f,0.107f}, {0.574f,0.071f},
+    {0.680f,0.015f}, {0.752f,-0.047f}, {0.764f,-0.083f}, {0.764f,-0.178f}, {0.753f,-0.213f}, {0.740f,-0.224f},
+    {0.704f,-0.227f}, {0.659f,-0.213f}, {0.479f,-0.105f}, {0.408f,-0.075f}, {0.349f,-0.035f}, {0.278f,-0.002f},
+    {0.101f,0.102f}, {0.041f,0.119f}, {-0.006f,0.122f}, {-0.101f,0.099f}, {-0.148f,0.065f}, {-0.467f,-0.102f},
+    {-0.527f,-0.142f}, {-0.598f,-0.173f}, {-0.657f,-0.214f},
+};
+const D2D1_POINT_2F kSff4[] = {
+    {-0.266f,0.236f}, {-0.302f,0.256f}, {-0.316f,0.296f}, {-0.312f,0.379f}, {-0.296f,0.426f}, {-0.278f,0.443f},
+    {-0.219f,0.469f}, {-0.148f,0.515f}, {-0.053f,0.559f}, {-0.018f,0.572f}, {0.030f,0.571f}, {0.160f,0.512f},
+    {0.254f,0.457f}, {0.300f,0.426f}, {0.318f,0.379f}, {0.319f,0.284f}, {0.290f,0.244f}, {0.243f,0.243f},
+    {0.148f,0.301f}, {0.041f,0.345f}, {0.006f,0.351f}, {-0.030f,0.347f}, {-0.124f,0.310f}, {-0.231f,0.245f},
+};
+struct Outline { const D2D1_POINT_2F* p; size_t n; };
+const Outline kSffMark[] = { { kSff0, std::size(kSff0) }, { kSff1, std::size(kSff1) }, { kSff2, std::size(kSff2) }, { kSff3, std::size(kSff3) }, { kSff4, std::size(kSff4) } };
 
 void Glyph(ID2D1DeviceContext* dc, ID2D1SolidColorBrush* brush, IDWriteTextFormat* f, const wchar_t* g, D2D1_RECT_F r,
            float zoom, D2D1_COLOR_F ink, float shadow) {
@@ -281,6 +328,21 @@ void DrawButtonIcon(ButtonId id, ID2D1DeviceContext* dc, ID2D1SolidColorBrush* b
         dc->SetTransform(D2D1::Matrix3x2F::Skew(-35, 0, c) * old);
         dc->FillGeometry(shape.Get(), fill.Get());
         dc->SetTransform(old);
+        break;
+    }
+    case ButtonId::Sff: {
+        // the gallery's cube mark, as tall as the other icons
+        float k = 8.6f * s;
+        ComPtr<ID2D1PathGeometry> mark; ComPtr<ID2D1GeometrySink> sink;
+        if (FAILED(g_gfx.d2dFactory->CreatePathGeometry(&mark)) || FAILED(mark->Open(&sink))) break;
+        sink->SetFillMode(D2D1_FILL_MODE_ALTERNATE);
+        for (auto& o : kSffMark) {
+            sink->BeginFigure({ c.x + o.p[0].x * k, c.y + o.p[0].y * k }, D2D1_FIGURE_BEGIN_FILLED);
+            for (size_t i = 1; i < o.n; ++i) sink->AddLine({ c.x + o.p[i].x * k, c.y + o.p[i].y * k });
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+        }
+        if (FAILED(sink->Close())) break;
+        dc->FillGeometry(mark.Get(), brush);
         break;
     }
     case ButtonId::Theme: {

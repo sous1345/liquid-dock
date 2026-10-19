@@ -221,10 +221,11 @@ static void AssertHitGeometry(Dock& d) {
   bool was=features::Quiet(simTime);d.Click(Dock::ButtonHit(ButtonId::Quiet));bool mid=features::Quiet(simTime);d.Click(Dock::ButtonHit(ButtonId::Quiet));
   Check(mid!=was && features::Quiet(simTime)==was,"quiet button switches bounces off and back on");
  }
- for(auto [id,uri]:{std::pair{ButtonId::Screenshot,L"ms-screenclip:"},std::pair{ButtonId::Trash,L"shell:RecycleBinFolder"}}){
+ for(auto [id,uri]:{std::pair{ButtonId::Screenshot,L"ms-screenclip:"},std::pair{ButtonId::Trash,L"shell:RecycleBinFolder"},
+                      std::pair{ButtonId::Sff,L"https://gall.dcinside.com/mgallery/board/lists/?id=sff"}}){
   if(!HasButton(id))continue;
   int before=shellOpens;d.Click(Dock::ButtonHit(id));
-  Check(shellOpens==before+1 && lastShellOpen==uri,"button opens its own Windows page");
+  Check(shellOpens==before+1 && lastShellOpen==uri,"button opens its own page");
  }
  for(auto id:{ButtonId::Downloads,ButtonId::Audio}){
   if(!HasButton(id))continue;
@@ -645,7 +646,7 @@ int wmain(int argc,wchar_t** argv) {
   g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.iconSize=x.size;g_settings.magnification=x.mag;
   g_settings.iconSpacing=x.spacing;g_settings.clockSize=x.clock;
   g_settings.magnification=std::min(g_settings.magnification,2.1f);   // what Settings::Load accepts
-  g_settings.trayButtons=x.buttons?"desktop,theme,oled,awake,screenshot,quiet,trash,downloads,audio":"";
+  g_settings.trayButtons=x.buttons?"desktop,theme,oled,awake,screenshot,quiet,trash,downloads,audio,sff":"";
   Apps(x.apps);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);
   // let the fit settle as it would after a few frames on screen
   for(int i=0;i<60;++i){d.ApplyFit(1.f/60.f);d.Layout(0);}
@@ -739,8 +740,8 @@ int wmain(int argc,wchar_t** argv) {
   report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
  }
  // Button lists: none, one, odd, every button, reversed, mixed; with crowded and sparse docks.
- const char* lists[]={"","trash","awake,quiet,screenshot","desktop,theme,oled,awake,screenshot,quiet,trash,downloads,audio",
-  "audio,downloads,trash,quiet,screenshot,awake,oled,theme,desktop","downloads,desktop"};
+ const char* lists[]={"","trash","awake,quiet,screenshot","desktop,theme,oled,awake,screenshot,quiet,trash,downloads,audio,sff",
+  "sff,audio,downloads,trash,quiet,screenshot,awake,oled,theme,desktop","downloads,desktop"};
  for(const auto& monitor:monitors)for(int edge=0;edge<4;++edge)for(int li=0;li<6;++li)for(bool crowded:{false,true}){
   ++cases;caseFailures=0;
   std::ostringstream label;label<<"buttons list="<<li<<" crowded="<<crowded<<" "<<monitor.name<<" edge="<<edge;caseLabel=label.str();

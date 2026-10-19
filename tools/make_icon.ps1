@@ -1,7 +1,11 @@
-# Generates assets\app.ico (16-256 px): a blue squircle with a frosted glass dock and three app tiles.
+# Generates assetspp.ico (16-256 px) and app.png: a pink-to-blue rounded square with one thick glass dock.
+# The SFF gallery mark (assets\sff-mark.png) sits above the dock.
+# With -Large <px> it also writes assetspp-<px>.png (for the promo video).
+param([int]$Large = 0)
 Add-Type -AssemblyName System.Drawing
 $root = Split-Path $PSScriptRoot -Parent
 $out = Join-Path $root 'assets'
+$script:mark = [System.Drawing.Image]::FromFile((Join-Path $out 'sff-mark.png'))
 New-Item -ItemType Directory -Force $out | Out-Null
 
 function RoundRect([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
@@ -12,33 +16,40 @@ function RoundRect([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
     $p.CloseFigure(); return $p
 }
 
+function Brush([float]$x0, [float]$y0, [float]$x1, [float]$y1, $stops) {
+    $br = New-Object System.Drawing.Drawing2D.LinearGradientBrush ([System.Drawing.PointF]::new($x0, $y0)), ([System.Drawing.PointF]::new($x1, $y1)),
+        ([System.Drawing.Color]::Black), ([System.Drawing.Color]::White)
+    $cb = New-Object System.Drawing.Drawing2D.ColorBlend $stops.Count
+    $cb.Colors = [System.Drawing.Color[]]@($stops | ForEach-Object { [System.Drawing.Color]::FromArgb([Convert]::ToInt32($_[1], 16)) })
+    $cb.Positions = [single[]]@($stops | ForEach-Object { $_[0] })
+    $br.InterpolationColors = $cb
+    return $br
+}
+
 function Render([int]$s) {
     $b = New-Object System.Drawing.Bitmap $s, $s, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($b)
     $g.SmoothingMode = 'AntiAlias'; $g.InterpolationMode = 'HighQualityBicubic'; $g.PixelOffsetMode = 'HighQuality'
     $k = $s / 256.0
-    # background squircle
-    $bg = RoundRect (8*$k) (8*$k) (240*$k) (240*$k) (56*$k)
-    $lg = New-Object System.Drawing.Drawing2D.LinearGradientBrush ([System.Drawing.PointF]::new(0, 0)), ([System.Drawing.PointF]::new($s, $s)),
-        ([System.Drawing.Color]::FromArgb(255, 72, 160, 255)), ([System.Drawing.Color]::FromArgb(255, 112, 70, 230))
-    $g.FillPath($lg, $bg)
-    # soft top highlight
-    $hl = New-Object System.Drawing.Drawing2D.LinearGradientBrush ([System.Drawing.PointF]::new(0, 8*$k)), ([System.Drawing.PointF]::new(0, 130*$k)),
-        ([System.Drawing.Color]::FromArgb(70, 255, 255, 255)), ([System.Drawing.Color]::FromArgb(0, 255, 255, 255))
-    $g.SetClip($bg)
-    $g.FillRectangle($hl, 0, [float](8*$k), [float]$s, [float](121*$k))
-    $g.ResetClip()
-    # glass dock
-    $dock = RoundRect (34*$k) (150*$k) (188*$k) (64*$k) (32*$k)
-    $g.FillPath((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(95, 255, 255, 255))), $dock)
-    if ($s -ge 32) { $g.DrawPath((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(200, 255, 255, 255)), ([float][Math]::Max(1, 3*$k))), $dock) }
-    # three app tiles sitting in the dock, the middle one magnified
-    $tiles = @(@(54, 164, 36, 'FFFFB020'), @(100, 140, 56, 'FF34D399'), @(166, 164, 36, 'FFFF5C7A'))
-    foreach ($t in $tiles) {
-        $c = [System.Drawing.Color]::FromArgb([Convert]::ToInt32($t[3], 16))
-        $tp = RoundRect ($t[0]*$k) ($t[1]*$k) ($t[2]*$k) ($t[2]*$k) ($t[2]*0.26*$k)
-        $g.FillPath((New-Object System.Drawing.SolidBrush $c), $tp)
-    }
+    # background: a rounded square in the wallpaper's flower colours, pink to violet to blue
+    $bg = RoundRect (8*$k) (8*$k) (240*$k) (240*$k) (58*$k)
+    $g.FillPath((Brush 0 0 $s $s @(@(0, 'FFFF7EB3'), @(0.55, 'FFA77BFF'), @(1, 'FF4F7DFF'))), $bg)
+    # one thick glass dock: a soft shadow, the glass body, its rim and a top highlight
+    $g.FillPath((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(64, 42, 27, 94))), (RoundRect (38*$k) (156*$k) (180*$k) (62*$k) (31*$k)))
+    $dock = RoundRect (38*$k) (148*$k) (180*$k) (62*$k) (31*$k)
+    $g.FillPath((Brush 0 (148*$k) 0 (210*$k) @(@(0, 'B3FFFFFF'), @(0.5, '38FFFFFF'), @(1, '73FFFFFF'))), $dock)
+    $g.DrawPath((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(230, 255, 255, 255)), ([float][Math]::Max(1, 3*$k))), $dock)
+    if ($s -ge 24) { $g.FillPath((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(191, 255, 255, 255))), (RoundRect (56*$k) (154*$k) (144*$k) (12*$k) (6*$k))) }
+    # the SFF gallery mark above it, with a soft shadow
+    $mw = 104 * $k * $script:mark.Width / $script:mark.Height; $mh = 104 * $k
+    $mr = [System.Drawing.RectangleF]::new([float](128*$k - $mw/2), [float](34*$k), [float]$mw, [float]$mh)
+    $cm = New-Object System.Drawing.Imaging.ColorMatrix
+    $cm.Matrix00 = 0; $cm.Matrix11 = 0; $cm.Matrix22 = 0; $cm.Matrix33 = 0.3
+    $cm.Matrix40 = 42/255; $cm.Matrix41 = 27/255; $cm.Matrix42 = 94/255
+    $ia = New-Object System.Drawing.Imaging.ImageAttributes; $ia.SetColorMatrix($cm)
+    $sr = [System.Drawing.Rectangle]::new([int]$mr.X, [int]($mr.Y + 5*$k), [int]$mw, [int]$mh)
+    $g.DrawImage($script:mark, $sr, 0, 0, $script:mark.Width, $script:mark.Height, [System.Drawing.GraphicsUnit]::Pixel, $ia)
+    $g.DrawImage($script:mark, $mr)
     $g.Dispose()
     return $b
 }
@@ -65,4 +76,5 @@ for ($i = 0; $i -lt $sizes.Count; $i++) {
 }
 foreach ($p in $pngs) { $w.Write($p) }
 $w.Close()
+if ($Large -gt 0) { $big = Render $Large; $big.Save((Join-Path $out "app-$Large.png")); $big.Dispose() }
 Get-Item (Join-Path $out 'app.ico') | Select-Object Name, Length
