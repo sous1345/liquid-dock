@@ -4,14 +4,18 @@
 #include "capture.h"
 #include "apps.h"
 #include "window_preview.h"
+#include "buttons.h"
+#include <shellapi.h>
 
 extern Settings g_settings;
 extern HWND g_mainWnd;
 constexpr UINT WM_APP_REBUILD = WM_APP + 1;
 constexpr UINT WM_APP_AUTOSTART = WM_APP + 2;
-constexpr UINT WM_APP_RELAYOUT = WM_APP + 3;
-constexpr UINT WM_APP_APPBAR = WM_APP + 40;
-constexpr UINT WM_APP_SETTINGS = WM_APP + 4;    // open the settings window     // shell notifications for an always-shown dock   // shape settings changed: lay the docks out again in place
+constexpr UINT WM_APP_RELAYOUT = WM_APP + 3;    // shape settings changed: lay the docks out again in place
+constexpr UINT WM_APP_SETTINGS = WM_APP + 4;    // open the settings window
+constexpr UINT WM_APP_APPBAR = WM_APP + 40;     // shell notifications for an always-shown dock
+
+void OpenTaskManager();
 
 // One dock per monitor. The implementation is split by concern:
 //   dock.cpp           window, per-frame state (reveal, magnify, drag, bounce), input messages
@@ -49,47 +53,66 @@ private:
         // layout
         float u = 0, size = 0, u0 = 0, weight = 0;
     };
-    enum HitKind { HitNone, HitSlot, HitTray, HitNet, HitVol, HitClock, HitSensor, HitPanel, HitBar,
-                   HitDesktop, HitTheme, HitOled, HitSettings, HitKindCount };
-    struct Hit { HitKind kind = HitNone; int slot = -1; };
+    enum HitKind { HitNone, HitSlot, HitTray, HitClock, HitSensor, HitPanel, HitBar, HitButton, HitKindCount };
+    struct Hit {
+        HitKind kind = HitNone; int slot = -1; ButtonId button = ButtonId::Count;
+        bool Is(ButtonId b) const { return kind == HitButton && button == b; }
+        bool operator==(const Hit& o) const { return kind == o.kind && slot == o.slot && button == o.button; }
+    };
+    static Hit ButtonHit(ButtonId b) { Hit h; h.kind = HitButton; h.button = b; return h; }
 
-    // ---- small tray buttons (dock_controls.cpp): everything a button needs, in one row of a table.
-    // Two buttons of a group share a cell, split across the bar's thickness, when half the bar is
-    // still a comfortable click target.
+    // ---- small tray buttons (dock_controls.cpp): what a button does, one row per button. What it
+    // looks like is in buttons.cpp (shared with the settings preview). Two buttons of a group share a
+    // cell, split across the bar's thickness, when half the bar is still a comfortable click target.
     struct SmallButton {
-        HitKind kind;
-        int group;                         // 0: network + volume, 1: utilities after the sensor cell
-        bool Settings::* shown;            // nullptr: always shown
+        ButtonId id;
         float iconFactor, minWidth;        // cell width = max(icon * factor, minWidth * scale)
         std::wstring (Dock::* tooltip)() const;
-        void (Dock::* draw)(D2D1_RECT_F r, float u, float vis);
         void (Dock::* click)();
+        void (Dock::* rightClick)();       // nullptr: the dock menu
     };
-    static const SmallButton kSmallButtons[];
-    static const SmallButton* FindSmallButton(HitKind kind);
-    static bool Shown(const SmallButton& b) { return !b.shown || g_settings.*b.shown; }
+    static const SmallButton kSmallButtons[kButtonCount];
+    static const SmallButton& Button(ButtonId id) { return kSmallButtons[(int)id]; }
+    // group 0: network + volume; group 1: the user's buttons, then settings
+    static std::vector<ButtonId> Group(int group);
     std::wstring TipNetwork() const;
     std::wstring TipVolume() const;
     std::wstring TipDesktop() const;
     std::wstring TipTheme() const;
     std::wstring TipOled() const;
+    std::wstring TipAwake() const;
+    std::wstring TipScreenshot() const;
+    std::wstring TipQuiet() const;
+    std::wstring TipTrash() const;
+    std::wstring TipDownloads() const;
+    std::wstring TipAudio() const;
     std::wstring TipSettings() const;
-    void DrawNetwork(D2D1_RECT_F r, float u, float vis);
-    void DrawVolume(D2D1_RECT_F r, float u, float vis);
-    void DrawDesktop(D2D1_RECT_F r, float u, float vis);
-    void DrawTheme(D2D1_RECT_F r, float u, float vis);
-    void DrawOled(D2D1_RECT_F r, float u, float vis);
-    void DrawSettings(D2D1_RECT_F r, float u, float vis);
     void ClickNetwork();
     void ClickVolume();
     void ClickDesktop();
     void ClickTheme();
     void ClickOled();
+    void ClickAwake();
+    void ClickScreenshot();
+    void ClickQuiet();
+    void ClickTrash();
+    void ClickDownloads();
+    void ClickAudio();
     void ClickSettings();
+    void MenuNetwork() { ShowTrayMenu(ButtonHit(ButtonId::Network)); }
+    void MenuVolume() { ShowTrayMenu(ButtonHit(ButtonId::Volume)); }
+    void MenuQuiet();
+    void MenuTrash();
+    void MenuDownloads();
+    void MenuAudio();
+    bool DropOnTrash(HDROP drop);
 
     // ---- layout (dock_layout.cpp)
     struct Cell { float u0 = 0, u1 = 0; int half = -1; float Mid() const { return (u0 + u1) * 0.5f; } };   // half -1: whole cell
-    Cell cells[HitKindCount];              // tray, clock, sensor and the small buttons
+    Cell cells[HitKindCount];              // tray, clock and sensor
+    Cell buttonCells[kButtonCount];        // the small buttons
+    Cell& Cell_(ButtonId b) { return buttonCells[(int)b]; }
+    const Cell& Cell_(ButtonId b) const { return buttonCells[(int)b]; }
     bool stackButtons = false;
     struct LayoutMetrics {
         float icon, padding, gap, thickness;
@@ -99,9 +122,9 @@ private:
         float TrayWidth() const { return separator + trayButton + connectivity + clock + sensor + utilities; }
     };
     LayoutMetrics MeasureMetrics(float fitFactor, int thicknessPct = -1);
-    float SmallButtonWidth(const SmallButton& b, const LayoutMetrics& m) const;
+    float SmallButtonWidth(ButtonId b, const LayoutMetrics& m) const;
     float ArrangeGroup(int group, const LayoutMetrics& m, float x, bool assign);   // returns the end
-    D2D1_RECT_F ButtonRect(HitKind kind, bool hit = false) const;
+    D2D1_RECT_F ButtonRect(ButtonId b, bool hit = false) const;
     float ButtonIconScale() const { return stackButtons ? 0.8f : 1.0f; }
     void Metrics();
     void ApplyFit(float dt);
@@ -135,7 +158,7 @@ private:
     // ---- menus (dock_controls.cpp)
     void ShowAppMenu(Slot& s);
     void ShowDockMenu();
-    void ShowTrayMenu(HitKind kind);
+    void ShowTrayMenu(const Hit& h);   // network, volume, clock, sensor
     int  PopupMenu(HMENU m);
     void ToggleOled();
 
@@ -144,7 +167,6 @@ private:
     void DrawStartIcon(D2D1_RECT_F r, float alpha);
     void DrawTooltip(const std::wstring& text, float u, float vBase);
     void DrawShadowText(const std::wstring& t, IDWriteTextFormat* f, D2D1_RECT_F r, float u, float alpha);
-    void DrawGlyph(const wchar_t* glyph, D2D1_RECT_F r, float u, float vis);
     void DrawSensorCell(float v0, float v1, float vis);
     void DrawSensorPeek();
     void DrawPanel();
@@ -167,7 +189,7 @@ private:
     bool menuOpen = false;
     bool busy = false, dirty = true;
     int lastStructure = -1, lastSysVersion = -1;
-    int hoverSlot = -1; HitKind hoverKind = HitNone;
+    int hoverSlot = -1; HitKind hoverKind = HitNone; ButtonId hoverButton = ButtonId::Count;
     std::wstring tooltipText; float tooltipU = 0, tooltipV = 0;
 
     std::vector<Slot> slots;
@@ -186,7 +208,7 @@ private:
     Spring sbPeek;
 
     // input
-    int pressSlot = -1; HitKind pressKind = HitNone;
+    int pressSlot = -1; HitKind pressKind = HitNone; ButtonId pressButton = ButtonId::Count;
     POINT pressPt{};
     bool dragging = false;
     int dropIndex = -1; bool dropRemove = false;

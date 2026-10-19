@@ -8,24 +8,32 @@ IDWriteTextFormat* Dock::ClockFont(bool date) const {
     return g_settings.clockSize == 1 ? g_gfx.fmtTimeLarge.Get() : g_gfx.fmtTime.Get();
 }
 
-float Dock::SmallButtonWidth(const SmallButton& b, const LayoutMetrics& m) const {
-    return Shown(b) ? std::max(m.icon * b.iconFactor, b.minWidth * scale) : 0;
+float Dock::SmallButtonWidth(ButtonId b, const LayoutMetrics& m) const {
+    const auto& sb = Button(b);
+    return std::max(m.icon * sb.iconFactor, sb.minWidth * scale);
 }
 
-// Lays out one group of small buttons from x, in table order. When stacking, two neighbours share
-// a cell (an odd one keeps a whole cell); hidden buttons take no space. Returns the end of the group.
+std::vector<ButtonId> Dock::Group(int group) {
+    if (group == 0) return { ButtonId::Network, ButtonId::Volume };
+    auto ids = ChosenButtons();
+    ids.push_back(ButtonId::Settings);   // always last: the way into the settings
+    return ids;
+}
+
+// Lays out one group of small buttons from x, in order. When stacking, two neighbours share a cell
+// (an odd one keeps a whole cell). Returns the end of the group.
 float Dock::ArrangeGroup(int group, const LayoutMetrics& m, float x, bool assign) {
     Cell* waiting = nullptr; float waitingW = 0;
-    for (const SmallButton* b = kSmallButtons; b->kind != HitNone; ++b) {
-        if (b->group != group) continue;
-        Cell scratch, &c = assign ? cells[b->kind] : scratch;
-        float w = SmallButtonWidth(*b, m);
+    Cell scratch[2];
+    int n = 0;
+    for (ButtonId id : Group(group)) {
+        Cell& c = assign ? Cell_(id) : scratch[n++ & 1];
+        float w = SmallButtonWidth(id, m);
         c.half = -1;
-        if (w <= 0) { c.u0 = c.u1 = x; continue; }
         if (!m.stack) { c.u0 = x; c.u1 = x += w; continue; }
         if (!waiting) { waiting = &c; waitingW = w; c.u0 = x; c.u1 = x + w; continue; }
         float cell = std::max(waitingW, w);
-        if (assign) { waiting->u1 = x + cell; waiting->half = 0; }
+        waiting->u1 = x + cell; waiting->half = 0;
         c.u0 = x; c.u1 = x + cell; c.half = 1;
         x += cell; waiting = nullptr;
     }
@@ -177,6 +185,7 @@ void Dock::Layout(double) {
     sepU = x; x += metrics.separator;
     cells[HitTray].u0 = x; cells[HitTray].u1 = x + metrics.trayButton;
     stackButtons = metrics.stack;
+    for (auto& c : buttonCells) c = Cell{};   // buttons not on the dock take no space
     x = ArrangeGroup(0, metrics, cells[HitTray].u1, true);
     cells[HitClock].u0 = x; cells[HitClock].u1 = x + metrics.clock;
     cells[HitSensor].u0 = cells[HitClock].u1; cells[HitSensor].u1 = cells[HitSensor].u0 + metrics.sensor;
@@ -229,12 +238,12 @@ float Dock::TextWidth(IDWriteTextFormat* f, const std::wstring& s) {
     return TextSize(f, s).width;
 }
 
-D2D1_RECT_F Dock::ButtonRect(HitKind kind, bool hit) const {
-    if (!FindSmallButton(kind)) return {};
-    const Cell& c = cells[kind];
+D2D1_RECT_F Dock::ButtonRect(ButtonId b, bool hit) const {
+    if (b == ButtonId::Count) return {};
+    const Cell& c = Cell_(b);
     if (c.u1 <= c.u0) return {};
     float u1 = c.u1;
-    if (hit && u1 >= cells[HitSettings].u1 - 0.5f) u1 = std::max(u1, barU1);   // the last cell also takes clicks on the end padding
+    if (hit && u1 >= Cell_(ButtonId::Settings).u1 - 0.5f) u1 = std::max(u1, barU1);   // the last cell also takes clicks on the end padding
     auto r = RectUV(c.u0, u1, margin - hideOff, margin + barThick - hideOff);
     if (c.half >= 0) {
         // Split in screen coordinates: the first button is left (side docks) or on top
@@ -263,12 +272,9 @@ Dock::Hit Dock::HitTestUV(float u, float v) {
     }
     if (v < vb0 - 4 || v > vb1) return h;
     const auto point = W(u, v);
-    for (const SmallButton* b = kSmallButtons; b->kind != HitNone; ++b) {
-        if (!Shown(*b)) continue;
-        auto r = ButtonRect(b->kind, true);
-        if (point.x >= r.left && point.x < r.right && point.y >= r.top && point.y < r.bottom) {
-            h.kind = b->kind; return h;
-        }
+    for (int i = 0; i < kButtonCount; ++i) {
+        auto r = ButtonRect((ButtonId)i, true);   // empty for buttons not on the dock
+        if (point.x >= r.left && point.x < r.right && point.y >= r.top && point.y < r.bottom) return ButtonHit((ButtonId)i);
     }
     if (u >= cells[HitTray].u0 && u < cells[HitTray].u1) h.kind = HitTray;
     else if (u >= cells[HitClock].u0 && u < cells[HitClock].u1) h.kind = HitClock;

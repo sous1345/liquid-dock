@@ -29,22 +29,30 @@ int wmain() {
     const std::string legacy = "edge=1\niconSize=54\nmagnification=2.1\nglassStyle=2\nshowDelay=0.15\nhideDelay=0.7\nautostart=1\ncpuTemp=0\npinsVersion=2\n";
     write(legacy);
     Settings s; s.Load();
-    Check(s.showDesktopButton && s.clockSize == 0 && s.iconSpacing == 1, "legacy settings get new defaults");
+    Check(s.trayButtons == "desktop,theme" && s.clockSize == 0 && s.iconSpacing == 1, "legacy settings get new defaults");
+    write(legacy + "showDesktopButton=0\nshowThemeButton=1\nshowOledButton=1\n");
+    Settings migrated; migrated.Load();
+    Check(migrated.trayButtons == "theme,oled", "the old button switches become the button list");
+    write(legacy + "trayButtons=\nshowDesktopButton=1\n");
+    Settings emptied; emptied.Load();
+    Check(emptied.trayButtons.empty(), "an empty button list stays empty (old switches ignored)");
+    emptied.Save();
+    { std::ifstream in(path); std::string all((std::istreambuf_iterator<char>(in)), {}); Check(all.find("showDesktopButton") == std::string::npos && all.find("trayButtons=") != std::string::npos, "old switches are no longer written"); }
     auto legacyUnchanged = [](const Settings& v) {
         return v.edge == Edge::Left && v.iconSize == 54 && v.magnification == 2.1f && v.glassStyle == 2 &&
                v.showDelay == 0.15f && v.hideDelay == 0.7f && v.autostart && !v.cpuTemp && v.pinsVersion == 2;
     };
     Check(legacyUnchanged(s), "legacy preferences survive load");
     for (bool desktop : {false, true}) for (int clock = 0; clock < 2; ++clock) for (int spacing = 0; spacing < 3; ++spacing) {
-        s.showDesktopButton = desktop; s.clockSize = clock; s.iconSpacing = spacing; s.Save();
+        s.trayButtons = desktop ? "desktop,theme" : "theme"; s.clockSize = clock; s.iconSpacing = spacing; s.Save();
         Settings loaded; loaded.Load();
-        Check(loaded.showDesktopButton == desktop && loaded.clockSize == clock && loaded.iconSpacing == spacing,
+        Check(loaded.trayButtons == (desktop ? "desktop,theme" : "theme") && loaded.clockSize == clock && loaded.iconSpacing == spacing,
               "all new option combinations survive save and fresh load");
         Check(legacyUnchanged(loaded), "saving new options preserves legacy preferences");
     }
     write(legacy + "showDesktopButton=invalid\nclockSize=invalid\niconSpacing=invalid\n");
     Settings invalid; invalid.Load();
-    Check(invalid.showDesktopButton && invalid.clockSize == 0 && invalid.iconSpacing == 1, "malformed new values use defaults");
+    Check(invalid.trayButtons == "desktop,theme" && invalid.clockSize == 0 && invalid.iconSpacing == 1, "malformed new values use defaults");
     Check(legacyUnchanged(invalid), "malformed new values do not discard legacy preferences");
     write(legacy + "clockSize=99\niconSpacing=-5\n");
     Settings bounded; bounded.Load();
@@ -73,7 +81,7 @@ int wmain() {
     Check(magnified.magnification == 2.1f, "magnification above the menu maximum is clamped");
     write(legacy + "clockSize=1\n");
     Settings partial; partial.Load();
-    Check(partial.clockSize == 1 && partial.showDesktopButton && partial.iconSpacing == 1, "partially upgraded files retain defaults for missing keys");
+    Check(partial.clockSize == 1 && partial.trayButtons == "desktop,theme" && partial.iconSpacing == 1, "partially upgraded files retain defaults for missing keys");
     printf("RESULT settings checks=%d failures=%d\n", checks, failures);
     return failures ? 1 : 0;
 }

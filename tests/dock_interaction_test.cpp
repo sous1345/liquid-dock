@@ -67,6 +67,20 @@ namespace theme {
 bool IsLight(){return themeLight;}
 bool Toggle(){++themeActions;themeLight=!themeLight;return true;}
 }
+// Shell, Recycle Bin and audio stubs: the matrix never opens pages, deletes files or switches devices
+static int shellOpens=0; static std::wstring lastShellOpen;
+static HINSTANCE WINAPI MatrixShellExecute(HWND,LPCWSTR,LPCWSTR file,LPCWSTR,LPCWSTR,INT){++shellOpens;lastShellOpen=file?file:L"";return (HINSTANCE)42;}
+static int MatrixFileOperation(LPSHFILEOPSTRUCTW){return 0;}
+static HRESULT WINAPI MatrixEmptyRecycleBin(HWND,LPCWSTR,DWORD){return S_OK;}
+#include "../src/audio_devices.h"
+static int audioSwitches=0;
+namespace audio {
+std::vector<Device> Outputs(){return {{L"a",L"Speakers",true},{L"b",L"Headset",false}};}
+bool SetDefault(const std::wstring&){++audioSwitches;return true;}
+}
+#define ShellExecuteW MatrixShellExecute
+#define SHFileOperationW MatrixFileOperation
+#define SHEmptyRecycleBinW MatrixEmptyRecycleBin
 #define GetMonitorInfoW MatrixMonitorInfo
 #define GetForegroundWindow MatrixForeground
 #define MonitorFromWindow MatrixMonitorFromWindow
@@ -149,24 +163,25 @@ static void AssertHitGeometry(Dock& d) {
   float u2,v2;d.ClientToUV((int)px.x,(int)px.y,u2,v2);Check(d.HitTestUV(u2,v2).kind==item.kind,"tray control rendered center maps to its own hit target");
   Check(item.start>=-1 && item.end<=d.len+1,"tray controls remain inside monitor edge");
  }
- auto network=d.ButtonRect(Dock::HitNet),volume=d.ButtonRect(Dock::HitVol);
+ auto& netCell=d.Cell_(ButtonId::Network);auto& volCell=d.Cell_(ButtonId::Volume);
+ auto network=d.ButtonRect(ButtonId::Network),volume=d.ButtonRect(ButtonId::Volume);
  if(d.stackButtons){
-  Check(d.cells[Dock::HitNet].u0==d.cells[Dock::HitVol].u0 && d.cells[Dock::HitNet].u1==d.cells[Dock::HitVol].u1 && d.cells[Dock::HitClock].u0==d.cells[Dock::HitVol].u1,"stacked connectivity shares one cell before clock");
+  Check(netCell.u0==volCell.u0 && netCell.u1==volCell.u1 && d.cells[Dock::HitClock].u0==volCell.u1,"stacked connectivity shares one cell before clock");
   if(IsVertical(g_settings.edge))Check(network.right<=volume.left+0.1f,"side docks: network left of volume");
   else Check(network.bottom<=volume.top+0.1f,"top and bottom docks: network above volume");
- }else Check(d.cells[Dock::HitNet].u1==d.cells[Dock::HitVol].u0 && d.cells[Dock::HitClock].u0==d.cells[Dock::HitVol].u1,"unstacked connectivity keeps two adjacent cells before clock");
- // every small button: inside the window, a comfortable size, its own click area, no overlap
- struct Btn{Dock::HitKind kind;bool on;float u0,u1;} btns[]={{Dock::HitNet,true,d.cells[Dock::HitNet].u0,d.cells[Dock::HitNet].u1},{Dock::HitVol,true,d.cells[Dock::HitVol].u0,d.cells[Dock::HitVol].u1},
-  {Dock::HitDesktop,g_settings.showDesktopButton,d.cells[Dock::HitDesktop].u0,d.cells[Dock::HitDesktop].u1},{Dock::HitTheme,g_settings.showThemeButton,d.cells[Dock::HitTheme].u0,d.cells[Dock::HitTheme].u1},
-  {Dock::HitOled,g_settings.showOledButton,d.cells[Dock::HitOled].u0,d.cells[Dock::HitOled].u1},{Dock::HitSettings,true,d.cells[Dock::HitSettings].u0,d.cells[Dock::HitSettings].u1}};
+ }else Check(netCell.u1==volCell.u0 && d.cells[Dock::HitClock].u0==volCell.u1,"unstacked connectivity keeps two adjacent cells before clock");
+ // every small button: inside the window, a comfortable size, its own click area, no overlap;
+ // chosen buttons in the chosen order after the sensor cell, settings last
  std::vector<D2D1_RECT_F> seen;
- for(auto& b:btns){
-  if(!b.on){Check(b.u0==b.u1,"hidden button reserves no space");continue;}
-  auto r=d.ButtonRect(b.kind);
+ float lastU=-1e9f;
+ for(int i=0;i<kButtonCount;++i){
+  ButtonId id=(ButtonId)i;const auto& c=d.Cell_(id);
+  if(!HasButton(id)){Check(c.u1<=c.u0,"buttons not on the dock take no space");continue;}
+  auto r=d.ButtonRect(id);
   // half a pixel of slack: at gap 0 the glass is flush with the screen edge
   Check(r.left>=-0.5f && r.top>=-0.5f && r.right<=d.winW+0.5f && r.bottom<=d.winH+0.5f,"small buttons stay inside dock window");
   Check(std::min(r.right-r.left,r.bottom-r.top)>=22*d.scale-1,"small buttons keep a comfortable click size");
-  Check(b.kind==Dock::HitNet||b.kind==Dock::HitVol||b.u0>=d.cells[Dock::HitSensor].u1,"utility buttons follow the sensor cell");
+  Check(Info(id).fixed||c.u0>=d.cells[Dock::HitSensor].u1,"utility buttons follow the sensor cell");
   for(auto& o:seen){
    float ix=std::min(r.right,o.right)-std::max(r.left,o.left),iy=std::min(r.bottom,o.bottom)-std::max(r.top,o.top);
    Check(ix<=0.5f||iy<=0.5f,"small buttons never overlap");
@@ -175,31 +190,54 @@ static void AssertHitGeometry(Dock& d) {
   for(float x:{0.15f,0.5f,0.85f})for(float y:{0.15f,0.5f,0.85f}){
    POINT local={(LONG)lerpf(r.left,r.right,x),(LONG)lerpf(r.top,r.bottom,y)};
    float u,v;d.ClientToUV(local.x,local.y,u,v);
-   Check(d.HitTestUV(u,v).kind==b.kind,"small button drawing matches its click target across the cell");
+   Check(d.HitTestUV(u,v).Is(id),"small button drawing matches its click target across the cell");
    Check(PtInRect(&d.curRegion,local)!=0,"small button remains in active input region");
   }
  }
- if(g_settings.showOledButton){
-  int before=oledActions;d.Click({Dock::HitOled,-1});d.Click({Dock::HitOled,-1});
+ {  // order: the user's list, then settings
+  auto order=ChosenButtons();order.push_back(ButtonId::Settings);
+  for(auto id:order){float u=d.Cell_(id).u0;Check(u>=lastU-0.01f,"buttons appear in the chosen order");lastU=u;}
+ }
+ // each optional button's click reaches its own action once (all stubbed: nothing real happens)
+ if(HasButton(ButtonId::Oled)){
+  int before=oledActions;d.Click(Dock::ButtonHit(ButtonId::Oled));d.Click(Dock::ButtonHit(ButtonId::Oled));
   Check(oledActions-before==2 && !oledOn,"OLED button toggles on and back off");
  }
- if(g_settings.showThemeButton){
-  int before=themeActions;bool was=themeLight;d.Click({Dock::HitTheme,-1});d.Click({Dock::HitTheme,-1});
+ if(HasButton(ButtonId::Theme)){
+  int before=themeActions;bool was=themeLight;d.Click(Dock::ButtonHit(ButtonId::Theme));d.Click(Dock::ButtonHit(ButtonId::Theme));
   Check(themeActions-before==2 && themeLight==was,"theme button flips the mode and back");
  }
- Check(d.cells[Dock::HitSettings].u1-d.cells[Dock::HitSettings].u0>=32*d.scale-0.1f,"settings button retains its minimum target width in crowded layouts");
+ if(HasButton(ButtonId::Awake)){
+  bool was=features::Awake();d.Click(Dock::ButtonHit(ButtonId::Awake));bool mid=features::Awake();d.Click(Dock::ButtonHit(ButtonId::Awake));
+  Check(mid!=was && features::Awake()==was,"keep-awake button switches on and back off");
+ }
+ if(HasButton(ButtonId::Quiet)){
+  bool was=features::Quiet(simTime);d.Click(Dock::ButtonHit(ButtonId::Quiet));bool mid=features::Quiet(simTime);d.Click(Dock::ButtonHit(ButtonId::Quiet));
+  Check(mid!=was && features::Quiet(simTime)==was,"quiet button switches bounces off and back on");
+ }
+ for(auto [id,uri]:{std::pair{ButtonId::Screenshot,L"ms-screenclip:"},std::pair{ButtonId::Trash,L"shell:RecycleBinFolder"}}){
+  if(!HasButton(id))continue;
+  int before=shellOpens;d.Click(Dock::ButtonHit(id));
+  Check(shellOpens==before+1 && lastShellOpen==uri,"button opens its own Windows page");
+ }
+ for(auto id:{ButtonId::Downloads,ButtonId::Audio}){
+  if(!HasButton(id))continue;
+  int before=settingsMenus;d.Click(Dock::ButtonHit(id));
+  Check(settingsMenus==before+1,"list buttons open their menu");
+ }
+ Check(d.Cell_(ButtonId::Settings).u1-d.Cell_(ButtonId::Settings).u0>=32*d.scale-0.1f,"settings button retains its minimum target width in crowded layouts");
  {
-  auto r=d.ButtonRect(Dock::HitSettings,true);
+  auto r=d.ButtonRect(ButtonId::Settings,true);
   POINT local={(LONG)((r.right+r.left)/2),(LONG)((r.top+r.bottom)/2)};
   Check(PtInRect(&d.curRegion,local)!=0,"settings target stays in active input region");
  }
  {
   // the end padding beside the gear (in the gear's half when it shares a cell)
-  auto pr=d.ButtonRect(Dock::HitSettings,true);
-  auto pe=d.W((d.cells[Dock::HitSettings].u1+d.barU1)*0.5f,d.margin+d.barThick*0.5f-d.hideOff);
+  auto pr=d.ButtonRect(ButtonId::Settings,true);
+  auto pe=d.W((d.Cell_(ButtonId::Settings).u1+d.barU1)*0.5f,d.margin+d.barThick*0.5f-d.hideOff);
   POINT pp=IsVertical(g_settings.edge)?POINT{(LONG)((pr.left+pr.right)*0.5f),(LONG)pe.y}:POINT{(LONG)pe.x,(LONG)((pr.top+pr.bottom)*0.5f)};
   float u,v;d.ClientToUV(pp.x,pp.y,u,v);
-  Check(d.HitTestUV(u,v).kind==Dock::HitSettings,"dock-end padding also opens settings");
+  Check(d.HitTestUV(u,v).Is(ButtonId::Settings),"dock-end padding also opens settings");
  }
  Check(d.curRegion.left>=0 && d.curRegion.top>=0 && d.curRegion.right<=d.winW && d.curRegion.bottom<=d.winH,"input region stays inside its window");
  Check(d.barU0>=-1 && d.barU1<=d.len+1,"glass bar stays inside monitor edge");
@@ -336,26 +374,26 @@ static void OptionsTests(Dock& d) {
  auto normalMetrics=d.MeasureMetrics(1);
  Check(d.base<=normalMetrics.icon,"clock space never increases app icon size");
  const int before=desktopActions;
- d.Click({Dock::HitDesktop,-1}); // stubbed Shell action: never minimizes real windows
- Check(desktopActions-before==(g_settings.showDesktopButton?1:0),"desktop button routes exactly one Shell action only when enabled");
- if(g_settings.showDesktopButton){
-  auto br=d.ButtonRect(Dock::HitDesktop);POINT p={d.winX+(LONG)((br.left+br.right)*0.5f),d.winY+(LONG)((br.top+br.bottom)*0.5f)};
+ d.Click(Dock::ButtonHit(ButtonId::Desktop)); // stubbed Shell action: never minimizes real windows
+ Check(desktopActions-before==1,"desktop button routes exactly one Shell action");
+ if(HasButton(ButtonId::Desktop)){
+  auto br=d.ButtonRect(ButtonId::Desktop);POINT p={d.winX+(LONG)((br.left+br.right)*0.5f),d.winY+(LONG)((br.top+br.bottom)*0.5f)};
   Advance(d,p,0.8);
-  Check(d.hoverKind==Dock::HitDesktop && d.reveal.target==1,"desktop button stays reachable with dock visible");
+  Check(d.hoverKind==Dock::HitButton && d.hoverButton==ButtonId::Desktop && d.reveal.target==1,"desktop button stays reachable with dock visible");
   Check(d.panelAlpha.target==0,"desktop hover does not open sensor panel");
  }
- auto sr=d.ButtonRect(Dock::HitSettings);POINT settingsPoint={d.winX+(LONG)((sr.left+sr.right)*0.5f),d.winY+(LONG)((sr.top+sr.bottom)*0.5f)};
+ auto sr=d.ButtonRect(ButtonId::Settings);POINT settingsPoint={d.winX+(LONG)((sr.left+sr.right)*0.5f),d.winY+(LONG)((sr.top+sr.bottom)*0.5f)};
  Advance(d,settingsPoint,0.8);
- Check(d.hoverKind==Dock::HitSettings && d.reveal.target==1,"gear remains reachable after leaving magnified apps");
+ Check(d.hoverButton==ButtonId::Settings && d.reveal.target==1,"gear remains reachable after leaving magnified apps");
  Check(d.panelAlpha.target==0,"settings hover does not open the sensor panel");
  int windowsBefore=settingsWindows,menuBefore=settingsMenus,desktopBefore=desktopActions;
- d.Click({Dock::HitSettings,-1}); // popup display is intercepted; no real menu or focus changes
+ d.Click(Dock::ButtonHit(ButtonId::Settings)); // popup display is intercepted; no real menu or focus changes
  Check(settingsWindows==windowsBefore+1 && settingsMenus==menuBefore && desktopActions==desktopBefore,"gear click opens the settings window, not a menu or the desktop action");
- for(auto kind:{Dock::HitNet,Dock::HitVol}){
-  auto r=d.ButtonRect(kind);
+ for(auto id:{ButtonId::Network,ButtonId::Volume}){
+  auto r=d.ButtonRect(id);
   POINT p={d.winX+(LONG)((r.left+r.right)*0.5f),d.winY+(LONG)((r.top+r.bottom)*0.5f)};
   Advance(d,p,0.8);
-  Check(d.hoverKind==kind && d.reveal.target==1,"connectivity hover selects its own tooltip and keeps dock visible");
+  Check(d.hoverButton==id && d.reveal.target==1,"connectivity hover selects its own tooltip and keeps dock visible");
   Check(!d.tooltipText.empty() && d.tooltipAlpha.target==1,"connectivity tooltip remains available in paired row");
  }
  ResetHidden(d);
@@ -382,7 +420,7 @@ static void DragSpacingTests(Dock& d) {
 static void RenderFixture(const MonitorCase& monitor,int edge,int index,int variant=0) {
  g_settings=Settings{};g_settings.edge=(Edge)edge;Apps(12);fgEnabled=false;
  if(variant==1 || variant==2){g_settings.clockSize=1;g_settings.iconSpacing=2;}
- if(variant==2)g_settings.showDesktopButton=false;
+ if(variant==2)SetButton(ButtonId::Desktop,false);
  if(variant==3)g_settings.iconSpacing=0;
  g_sys.timeText=variant?L"오후 12:59":L"21:30";g_sys.timeShort=variant?L"12:59":L"21:30";
  g_sys.dateText=variant?L"12/31 수요일":L"2026-10-07";
@@ -525,7 +563,7 @@ int wmain(int argc,wchar_t** argv) {
  for(int spacing=0;spacing<3;++spacing)for(bool desktop:{false,true})for(bool crowded:{false,true}){
   ++cases;caseFailures=0;
   std::ostringstream label;label<<"options "<<monitor.name<<" edge="<<edge<<" clock="<<clock<<" spacing="<<spacing<<" desktop="<<desktop<<" crowded="<<crowded;caseLabel=label.str();
-  g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.clockSize=clock;g_settings.iconSpacing=spacing;g_settings.showDesktopButton=desktop;g_settings.showOledButton=((edge+clock+spacing)&1)!=0;g_settings.showThemeButton=((edge+spacing)&1)==0;
+  g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.clockSize=clock;g_settings.iconSpacing=spacing;SetButton(ButtonId::Desktop,desktop);SetButton(ButtonId::Oled,((edge+clock+spacing)&1)!=0);SetButton(ButtonId::Theme,((edge+spacing)&1)==0);
   g_settings.iconSize=crowded?54.f:36.f;g_settings.magnification=crowded?2.1f:1.7f;
   Apps(crowded?40:12);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);OptionsTests(d);SweepTests(d);DragSpacingTests(d);
   report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
@@ -541,7 +579,7 @@ int wmain(int argc,wchar_t** argv) {
   g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.iconSize=x.size;g_settings.magnification=x.mag;
   g_settings.iconSpacing=x.spacing;g_settings.clockSize=x.clock;
   g_settings.magnification=std::min(g_settings.magnification,2.1f);   // what Settings::Load accepts
-  g_settings.showDesktopButton=g_settings.showThemeButton=g_settings.showOledButton=x.buttons;
+  g_settings.trayButtons=x.buttons?"desktop,theme,oled,awake,screenshot,quiet,trash,downloads,audio":"";
   Apps(x.apps);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);
   // let the fit settle as it would after a few frames on screen
   for(int i=0;i<60;++i){d.ApplyFit(1.f/60.f);d.Layout(0);}
@@ -557,7 +595,7 @@ int wmain(int argc,wchar_t** argv) {
   ++cases;caseFailures=0;
   std::ostringstream label;label<<"shape thick="<<sh.thick<<" gap="<<sh.gap<<" offset="<<sh.offset<<" "<<monitor.name<<" edge="<<edge;caseLabel=label.str();
   g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.dockThickness=sh.thick;g_settings.edgeGap=sh.gap;g_settings.edgeOffset=sh.offset;
-  g_settings.showOledButton=true;
+  SetButton(ButtonId::Oled,true);
   Apps(20);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);
   Check(std::fabs(d.margin-std::round(sh.gap*d.scale))<0.5f,"edge gap setting sets the glass distance from the edge");
   Check(d.margin+d.barThick<=d.T,"glass stays inside the dock window at any thickness and gap");

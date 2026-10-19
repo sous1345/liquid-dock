@@ -63,9 +63,9 @@ struct Settings {
     float iconSize = 44;        // at a 1440 px short screen side; scaled with the screen
     float magnification = 1.7f; // 1 = off
     int   glassStyle = 1;       // 0 clear, 1 normal, 2 frosted
-    bool  showDesktopButton = true;
-    bool  showThemeButton = true;   // Windows light/dark switch in the dock
-    bool  showOledButton = false;   // OLED burn-in guard toggle in the dock
+    std::string trayButtons = "desktop,theme";   // the user's buttons between the sensor cell and settings, in order
+    // read only from older files (before trayButtons), to build trayButtons once
+    bool  showDesktopButton = true, showThemeButton = true, showOledButton = false;
     bool  oledOneMonitor = false;   // black wallpaper only on the monitor whose dock was clicked
     int   clockSize = 0;        // 0 normal, 1 large; independent of icon size
     int   iconSpacing = 1;      // 0 compact, 1 normal, 2 wide (menu presets)

@@ -2,6 +2,7 @@
 #include "dock.h"
 #include "theme.h"
 #include "oled.h"
+#include "buttons.h"
 #include "sensors.h"
 #include "version.h"
 #include <dwmapi.h>
@@ -109,23 +110,23 @@ void BuildPages() {
     behaviour.reset = [] { Settings d; g_settings.autoHide = d.autoHide; g_settings.magnification = d.magnification; g_settings.showDelay = d.showDelay; g_settings.hideDelay = d.hideDelay; };
 
     Page buttons{ L"버튼", L"" };
-    buttons.controls = {
-        { Control::Toggle, L"바탕화면 보기 버튼", L"모든 창을 내리고 다시 누르면 되돌립니다", Apply::Live, {}, {}, {}, 0, 1, 1, {}, {}, {},
-          [] { return g_settings.showDesktopButton; }, [](bool v) { g_settings.showDesktopButton = v; } },
-        { Control::Toggle, L"다크/라이트 전환 버튼", L"Windows와 앱의 모드를 한 번에 바꿉니다", Apply::Live, {}, {}, {}, 0, 1, 1, {}, {}, {},
-          [] { return g_settings.showThemeButton; }, [](bool v) { g_settings.showThemeButton = v; } },
-        { Control::Toggle, L"OLED 버튼", L"검은 배경과 바탕화면 아이콘 숨김을 한 번에 (번인 방지)", Apply::Live, {}, {}, {}, 0, 1, 1, {}, {}, {},
-          [] { return g_settings.showOledButton; }, [](bool v) { g_settings.showOledButton = v; } },
-        { Control::Segmented, L"OLED 모드를 적용할 모니터", nullptr, Apply::None, { L"모든 모니터", L"설정을 연 모니터만" },
-          [] { return g_settings.oledOneMonitor ? 1 : 0; }, [](int i) { g_settings.oledOneMonitor = i == 1; } },
-        { Control::Toggle, L"OLED 모드 켜기", L"지금 바로 검은 배경으로 바꿉니다", Apply::None, {}, {}, {}, 0, 1, 1, {}, {}, {},
-          [] { return oled::Active(); },
-          [](bool v) { if (v) oled::Enable(g_settings.oledOneMonitor ? g_monitor : nullptr); else oled::Disable(); } },
-        { Control::Toggle, L"Windows 다크 모드", nullptr, Apply::None, {}, {}, {}, 0, 1, 1, {}, {}, {},
-          [] { return !theme::IsLight(); }, [](bool v) { if (v == theme::IsLight()) theme::Toggle(); } },
-    };
-    buttons.reset = [] { Settings d; g_settings.showDesktopButton = d.showDesktopButton; g_settings.showThemeButton = d.showThemeButton;
-                         g_settings.showOledButton = d.showOledButton; g_settings.oledOneMonitor = d.oledOneMonitor; };
+    buttons.controls.clear();
+    // one switch per optional button (the drag-and-drop preview replaces these)
+    for (int i = 0; i < kButtonCount; ++i) {
+        const ButtonInfo& bi = Info((ButtonId)i);
+        if (bi.fixed) continue;
+        ButtonId id = bi.id;
+        buttons.controls.push_back({ Control::Toggle, bi.name, bi.description, Apply::Live, {}, {}, {}, 0, 1, 1, {}, {}, {},
+            [id] { return HasButton(id); }, [id](bool v) { SetButton(id, v); } });
+    }
+    buttons.controls.push_back({ Control::Segmented, L"OLED 모드를 적용할 모니터", nullptr, Apply::None, { L"모든 모니터", L"설정을 연 모니터만" },
+        [] { return g_settings.oledOneMonitor ? 1 : 0; }, [](int i) { g_settings.oledOneMonitor = i == 1; } });
+    buttons.controls.push_back({ Control::Toggle, L"OLED 모드 켜기", L"지금 바로 검은 배경으로 바꿉니다", Apply::None, {}, {}, {}, 0, 1, 1, {}, {}, {},
+        [] { return oled::Active(); },
+        [](bool v) { if (v) oled::Enable(g_settings.oledOneMonitor ? g_monitor : nullptr); else oled::Disable(); } });
+    buttons.controls.push_back({ Control::Toggle, L"Windows 다크 모드", nullptr, Apply::None, {}, {}, {}, 0, 1, 1, {}, {}, {},
+        [] { return !theme::IsLight(); }, [](bool v) { if (v == theme::IsLight()) theme::Toggle(); } });
+    buttons.reset = [] { Settings d; g_settings.trayButtons = d.trayButtons; g_settings.oledOneMonitor = d.oledOneMonitor; };
 
     Page system{ L"시스템", L"" };
     system.controls = {

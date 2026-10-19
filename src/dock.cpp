@@ -319,14 +319,17 @@ void Dock::Update(double now, float dt, POINT cursor) {
     if (g_sys.version != lastSysVersion) { lastSysVersion = g_sys.version; dirty = true; }
     if (g_sensors.version != lastSensorVersion) { lastSensorVersion = g_sensors.version; dirty = true; }
 
+    // the quiet button holds back notification and overheat bounces (launch hops still show)
+    const bool quiet = features::Quiet(now);
+
     // overheat: the sensor cell bounces once (3 hops) on the primary monitor
-    if (primary && g_sensors.alertPending && sbCount == 0) {
+    if (primary && !quiet && g_sensors.alertPending && sbCount == 0) {
         sbStart = now; sbCount = 3; sbHidden = reveal.target < 0.5f;
         lastCaptureWanted = now;
     }
 
     // notifications bounce on the primary monitor only
-    if (primary) {
+    if (primary && !quiet) {
         for (auto& ev : g_apps.attentionEvents) {
             for (auto& s : slots) {
                 if (s.app && s.app->id == ev.id && !s.ghost) {
@@ -501,10 +504,10 @@ void Dock::Update(double now, float dt, POINT cursor) {
     ComputePanelRect();
 
     // ---- hover + tooltip
-    hoverSlot = -1; hoverKind = HitNone;
+    hoverSlot = -1; hoverKind = HitNone; hoverButton = ButtonId::Count;
     if (reveal.x > 0.9f && inMonitor && !dragging) {
         Hit h = HitTestUV(cursorU, cursorV);
-        hoverKind = h.kind; hoverSlot = h.slot;
+        hoverKind = h.kind; hoverSlot = h.slot; hoverButton = h.button;
     }
 
     // DWM previews live in a separate, non-activating owned popup. Only the
@@ -550,9 +553,9 @@ void Dock::Update(double now, float dt, POINT cursor) {
         GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_LONGDATE, &st, nullptr, d, 128, nullptr);
         tip = d;
         tooltipU = cells[HitClock].Mid(); tooltipV = barTip;
-    } else if (auto b = FindSmallButton(hoverKind)) {
-        tip = (this->*b->tooltip)();
-        tooltipU = cells[hoverKind].Mid(); tooltipV = barTip;
+    } else if (hoverKind == HitButton) {
+        tip = (this->*Button(hoverButton).tooltip)();
+        tooltipU = Cell_(hoverButton).Mid(); tooltipV = barTip;
     }
     if (windowPreview.Open()) { tip.clear(); tooltipAlpha.snap(0); }
     if (!tip.empty()) { tooltipText = tip; tooltipAlpha.target = 1; }
@@ -652,12 +655,13 @@ void Dock::Click(const Hit& h) {
     }
     case HitClock: nativetray::OpenCalendar(); break;
     case HitSensor: case HitPanel:
-        if (g_sensors.CpuTempAvailable() || g_settings.cpuTemp) SendKeyCombo({ VK_CONTROL, VK_SHIFT, VK_ESCAPE });   // Task Manager
+        if (g_sensors.CpuTempAvailable() || g_settings.cpuTemp) OpenTaskManager();
         else { SetForegroundWindow(hwnd); g_sensors.EnableCpuTemp(hwnd); }
         break;
-    default:
-        if (auto b = FindSmallButton(h.kind); b && Shown(*b)) (this->*b->click)();
+    case HitButton:
+        if (h.button != ButtonId::Count) (this->*Button(h.button).click)();
         break;
+    default: break;
     }
 }
 
@@ -688,7 +692,7 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         windowPreview.Dismiss();
         float u, v; ClientToUV(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), u, v);
         Hit h = HitTestUV(u, v);
-        pressKind = h.kind; pressSlot = h.kind == HitSlot ? h.slot : -1;
+        pressKind = h.kind; pressSlot = h.kind == HitSlot ? h.slot : -1; pressButton = h.button;
         GetCursorPos(&pressPt);
         if (pressSlot >= 0) slots[pressSlot].press.target = 1;
         SetCapture(hwnd);
@@ -701,9 +705,9 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         for (auto& s : slots) s.press.target = 0;
         if (dragging) { EndDrag(true); return 0; }
         Hit h = HitTestUV(u, v);
-        int ps = pressSlot; HitKind pk = pressKind;
-        pressSlot = -1; pressKind = HitNone;
-        if (h.kind == pk && (h.kind != HitSlot || h.slot == ps)) Click(h);
+        int ps = pressSlot; HitKind pk = pressKind; ButtonId pb = pressButton;
+        pressSlot = -1; pressKind = HitNone; pressButton = ButtonId::Count;
+        if (h.kind == pk && (h.kind != HitSlot || h.slot == ps) && (h.kind != HitButton || h.button == pb)) Click(h);
         dirty = true;
         return 0;
     }
@@ -715,7 +719,8 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         float u, v; ClientToUV(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), u, v);
         Hit h = HitTestUV(u, v);
         if (h.kind == HitSlot && slots[h.slot].app) ShowAppMenu(slots[h.slot]);
-        else if (h.kind == HitNet || h.kind == HitVol || h.kind == HitClock || h.kind == HitSensor || h.kind == HitPanel) ShowTrayMenu(h.kind);
+        else if (h.kind == HitButton && Button(h.button).rightClick) (this->*Button(h.button).rightClick)();
+        else if (h.kind == HitClock || h.kind == HitSensor || h.kind == HitPanel) ShowTrayMenu(h);
         else ShowDockMenu();
         return 0;
     }
@@ -724,14 +729,14 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         float u, v; ClientToUV(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), u, v);
         Hit h = HitTestUV(u, v);
         if (h.kind == HitSlot && slots[h.slot].app) { auto app = slots[h.slot].app; g_apps.Launch(*app, index); }
-        else if (h.kind == HitVol) g_sys.ToggleMute();
+        else if (h.Is(ButtonId::Volume)) g_sys.ToggleMute();
         return 0;
     }
     case WM_MOUSEWHEEL: {
         POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         float u, v; ScreenToUV(p, u, v);
         Hit h = HitTestUV(u, v);
-        if (h.kind == HitVol) g_sys.AddVolume(GET_WHEEL_DELTA_WPARAM(wp) / 120.0f * 0.02f);
+        if (h.Is(ButtonId::Volume)) g_sys.AddVolume(GET_WHEEL_DELTA_WPARAM(wp) / 120.0f * 0.02f);
         return 0;
     }
     case WM_DROPFILES: {
@@ -739,6 +744,7 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         HDROP hd = (HDROP)wp;
         POINT p; DragQueryPoint(hd, &p);
         float u, v; ClientToUV(p.x, p.y, u, v);
+        if (HitTestUV(u, v).Is(ButtonId::Trash)) { DropOnTrash(hd); DragFinish(hd); return 0; }
         int idx = 0;
         for (auto& s : slots) if (s.app && !s.ghost && s.u < u) idx++;
         UINT n = DragQueryFileW(hd, 0xFFFFFFFF, nullptr, 0);

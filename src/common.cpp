@@ -80,17 +80,19 @@ std::wstring FromUtf8(const std::string& s) {
 namespace {
 struct Field {
     const char* key;
-    std::variant<float Settings::*, int Settings::*, bool Settings::*, Edge Settings::*> member;
-    float lo = 0, hi = 0;   // numeric range (ignored for flags)
+    std::variant<float Settings::*, int Settings::*, bool Settings::*, Edge Settings::*, std::string Settings::*> member;
+    float lo = 0, hi = 0;   // numeric range (ignored for flags and text)
+    bool legacy = false;    // read from older files, no longer written
 };
 const Field kFields[] = {
     { "edge", &Settings::edge, 0, 3 },
     { "iconSize", &Settings::iconSize, 32, 96 },
     { "magnification", &Settings::magnification, 1, 2.1f },   // above the menu's maximum, crowded icons slide away from the pointer
     { "glassStyle", &Settings::glassStyle, 0, 2 },
-    { "showDesktopButton", &Settings::showDesktopButton },
-    { "showThemeButton", &Settings::showThemeButton },
-    { "showOledButton", &Settings::showOledButton },
+    { "trayButtons", &Settings::trayButtons },
+    { "showDesktopButton", &Settings::showDesktopButton, 0, 0, true },
+    { "showThemeButton", &Settings::showThemeButton, 0, 0, true },
+    { "showOledButton", &Settings::showOledButton, 0, 0, true },
     { "oledOneMonitor", &Settings::oledOneMonitor },
     { "clockSize", &Settings::clockSize, 0, 1 },
     { "iconSpacing", &Settings::iconSpacing, 0, 2 },
@@ -110,6 +112,7 @@ const Field kFields[] = {
 void Settings::Load() {
     std::ifstream f(AppDataDir() + L"\\settings.ini");
     std::string line;
+    bool sawButtons = false;
     while (std::getline(f, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         auto eq = line.find('=');
@@ -120,7 +123,8 @@ void Settings::Load() {
             try {
                 std::visit([&](auto m) {
                     using T = std::remove_cvref_t<decltype(this->*m)>;
-                    if constexpr (std::is_same_v<T, bool>) this->*m = std::stoi(v) != 0;
+                    if constexpr (std::is_same_v<T, std::string>) { this->*m = v; sawButtons = true; }
+                    else if constexpr (std::is_same_v<T, bool>) this->*m = std::stoi(v) != 0;
                     else if constexpr (std::is_same_v<T, float>) this->*m = std::clamp(std::stof(v), fd.lo, fd.hi);
                     else if constexpr (std::is_same_v<T, int>) this->*m = std::clamp(std::stoi(v), (int)fd.lo, (int)fd.hi);
                     else this->*m = (T)std::clamp(std::stoi(v), (int)fd.lo, (int)fd.hi);
@@ -128,6 +132,11 @@ void Settings::Load() {
             } catch (...) {}
             break;
         }
+    }
+    if (!sawButtons) {   // a file from before the button list: carry its three on/off choices over
+        trayButtons.clear();
+        for (auto [on, key] : { std::pair{ showDesktopButton, "desktop" }, std::pair{ showThemeButton, "theme" }, std::pair{ showOledButton, "oled" } })
+            if (on) { if (!trayButtons.empty()) trayButtons += ','; trayButtons += key; }
     }
 }
 
@@ -137,10 +146,12 @@ void Settings::Save() const {
     {
         std::ofstream f(tmp, std::ios::trunc);
         for (auto& fd : kFields) {
+            if (fd.legacy) continue;
             f << fd.key << "=";
             std::visit([&](auto m) {
                 using T = std::remove_cvref_t<decltype(this->*m)>;
-                if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, int>) f << (int)(this->*m);
+                if constexpr (std::is_same_v<T, std::string>) f << this->*m;
+                else if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, int>) f << (int)(this->*m);
                 else if constexpr (std::is_same_v<T, float>) f << this->*m;
                 else f << (int)(this->*m);
             }, fd.member);

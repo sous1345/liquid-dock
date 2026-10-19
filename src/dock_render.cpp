@@ -391,17 +391,19 @@ void Dock::Render() {
         dc->FillRectangle(sr, brush.Get());
 
         // hover highlight
-        D2D1_RECT_F hr{};
-        if (FindSmallButton(hoverKind)) {
-            hr = ButtonRect(hoverKind);
+        D2D1_RECT_F hr{}; float hu = 0;
+        if (hoverKind == HitButton) {
+            hr = ButtonRect(hoverButton);
             float inset = (stackButtons ? 1.5f : 2.0f) * scale;
             hr.left += inset; hr.right -= inset; hr.top += inset; hr.bottom -= inset;
+            hu = Cell_(hoverButton).Mid();
         } else if (hoverKind == HitTray || hoverKind == HitClock || hoverKind == HitSensor) {
             const Cell& c = cells[hoverKind];
             hr = RectUV(c.u0 + 1, c.u1 - 1, v0 + pad * 0.6f, v1 - pad * 0.6f);
+            hu = c.Mid();
         }
         if (hr.right > hr.left) {
-            float ink = InkAt(cells[hoverKind].Mid());
+            float ink = InkAt(hu);
             brush->SetColor(D2D1::ColorF(1 - ink, 1 - ink, 1 - ink, lerpf(0.16f, 0.08f, ink) * vis));
             dc->FillRoundedRectangle({ hr, 8 * scale, 8 * scale }, brush.Get());
         }
@@ -423,8 +425,15 @@ void Dock::Render() {
         } else {
             DrawShadowText(g_sys.timeShort, ClockFont(), RectUV(clk.u0, clk.u1, v0, v1), clk.Mid(), vis);
         }
-        for (const SmallButton* b = kSmallButtons; b->kind != HitNone; ++b)
-            if (Shown(*b)) (this->*b->draw)(ButtonRect(b->kind), cells[b->kind].Mid(), vis);
+        // the small buttons: the same drawing as the settings preview (buttons.cpp)
+        const IconState st = CurrentIconState(NowSeconds());
+        for (int i = 0; i < kButtonCount; ++i) {
+            auto r = ButtonRect((ButtonId)i);
+            if (r.right <= r.left) continue;
+            float u = Cell_((ButtonId)i).Mid(), ink = InkAt(u);
+            DrawButtonIcon((ButtonId)i, dc, brush.Get(), g_gfx.fmtGlyph.Get(), r, scale, ButtonIconScale(), Ink(u, vis),
+                           ink < 0.95f ? 0.35f * vis * (1 - ink) : 0, st);
+        }
     }
 
     // dragged icon follows the cursor
@@ -513,98 +522,3 @@ void Dock::DrawShadowText(const std::wstring& t, IDWriteTextFormat* f, D2D1_RECT
     dc->DrawTextW(t.c_str(), (UINT32)t.size(), f, r, brush.Get());
 }
 
-// Segoe Fluent glyph centred in a button cell; a little smaller when two buttons share the cell.
-void Dock::DrawGlyph(const wchar_t* glyph, D2D1_RECT_F r, float u, float vis) {
-    auto* dc = g_gfx.dc.Get();
-    float f = ButtonIconScale();
-    if (f != 1) dc->SetTransform(D2D1::Matrix3x2F::Scale(f, f, { (r.left + r.right) * 0.5f, (r.top + r.bottom) * 0.5f }));
-    DrawShadowText(glyph, g_gfx.fmtGlyph.Get(), r, u, vis);
-    dc->SetTransform(D2D1::Matrix3x2F::Identity());
-}
-
-void Dock::DrawNetwork(D2D1_RECT_F r, float u, float vis) {
-    DrawGlyph(g_sys.net == 0 ? L"" : (g_sys.net == 2 ? L"" : L""), r, u, vis);
-}
-
-void Dock::DrawVolume(D2D1_RECT_F r, float u, float vis) {
-    DrawGlyph(g_sys.muted ? L"" : g_sys.volume < 0.01f ? L"" : g_sys.volume < 0.34f ? L""
-              : g_sys.volume < 0.67f ? L"" : L"", r, u, vis);
-}
-
-void Dock::DrawSettings(D2D1_RECT_F r, float u, float vis) { DrawGlyph(L"", r, u, vis); }
-
-// A desktop outline, kept upright on all four edges.
-void Dock::DrawDesktop(D2D1_RECT_F r, float u, float vis) {
-    auto* dc = g_gfx.dc.Get();
-    D2D1_POINT_2F p = { (r.left + r.right) * 0.5f, (r.top + r.bottom) * 0.5f };
-    float s = scale * ButtonIconScale();
-    brush->SetColor(Ink(u, vis));
-    auto screen = D2D1::RectF(p.x - 8 * s, p.y - 6 * s, p.x + 8 * s, p.y + 4 * s);
-    dc->DrawRoundedRectangle({ screen, 1.5f * s, 1.5f * s }, brush.Get(), 1.4f * s);
-    dc->DrawLine({ p.x, p.y + 4 * s }, { p.x, p.y + 7 * s }, brush.Get(), 1.4f * s);
-    dc->DrawLine({ p.x - 4 * s, p.y + 7 * s }, { p.x + 4 * s, p.y + 7 * s }, brush.Get(), 1.4f * s);
-}
-
-// Three bars (red, green, blue: an OLED subpixel) leaning 35 degrees inside one rounded
-// outline; grey ink while the mode is off. Kept upright on every edge.
-void Dock::DrawOled(D2D1_RECT_F br, float u, float vis) {
-    auto* dc = g_gfx.dc.Get();
-    D2D1_POINT_2F p = { (br.left + br.right) * 0.5f, (br.top + br.bottom) * 0.5f };
-    float s = scale * ButtonIconScale();
-    float w = 13 * s, h = 15 * s;
-    D2D1_RECT_F r = { p.x - w / 2, p.y - h / 2, p.x + w / 2, p.y + h / 2 };
-    ComPtr<ID2D1RoundedRectangleGeometry> shape;
-    if (FAILED(g_gfx.d2dFactory->CreateRoundedRectangleGeometry({ r, 2.6f * s, 2.6f * s }, &shape))) return;
-
-    D2D1_COLOR_F c[3];
-    if (oled::Active()) {
-        c[0] = D2D1::ColorF(0xFF3B30, vis); c[1] = D2D1::ColorF(0x5BC22A, vis); c[2] = D2D1::ColorF(0x4459F0, vis);
-    } else {
-        const float a[3] = { 0.55f, 0.75f, 0.95f };
-        for (int i = 0; i < 3; ++i) { c[i] = Ink(u, vis); c[i].a *= a[i]; }
-    }
-    // hard colour stops: one gradient brush paints all three bars
-    D2D1_GRADIENT_STOP stops[6] = { { 0, c[0] }, { 1 / 3.0f, c[0] }, { 1 / 3.0f, c[1] }, { 2 / 3.0f, c[1] }, { 2 / 3.0f, c[2] }, { 1, c[2] } };
-    ComPtr<ID2D1GradientStopCollection> coll;
-    ComPtr<ID2D1LinearGradientBrush> fill;
-    if (FAILED(dc->CreateGradientStopCollection(stops, 6, &coll)) ||
-        FAILED(dc->CreateLinearGradientBrush({ { r.left, p.y }, { r.right, p.y } }, coll.Get(), &fill))) return;
-    dc->SetTransform(D2D1::Matrix3x2F::Skew(-35, 0, p));
-    dc->FillGeometry(shape.Get(), fill.Get());
-    dc->SetTransform(D2D1::Matrix3x2F::Identity());
-}
-
-// A bulb hung upside down: base and cord at the top, the round glass below. Dark mode: outline;
-// light mode: filled with rays spreading from the glass. Ink colour only.
-void Dock::DrawTheme(D2D1_RECT_F br, float u, float vis) {
-    auto* dc = g_gfx.dc.Get();
-    D2D1_POINT_2F p = { (br.left + br.right) * 0.5f, (br.top + br.bottom) * 0.5f };
-    float k = 0.55f * scale * ButtonIconScale();   // drawing units: the glass is 16 units wide
-    auto pt = [&](float x, float y) { return D2D1::Point2F(p.x + x * k, p.y + y * k); };
-    bool lit = theme::IsLight();
-    auto ink = Ink(u, vis * (lit ? 1.0f : 0.8f));
-    float line = 1.8f * k;
-
-    // glass: circle (0, 2) r 8 with a neck 9 units wide up to y = -7
-    ComPtr<ID2D1PathGeometry> glass;
-    ComPtr<ID2D1GeometrySink> sink;
-    if (FAILED(g_gfx.d2dFactory->CreatePathGeometry(&glass)) || FAILED(glass->Open(&sink))) return;
-    sink->BeginFigure(pt(-4.5f, -7), D2D1_FIGURE_BEGIN_FILLED);
-    sink->AddLine(pt(-4.5f, -4.61f));
-    sink->AddArc({ pt(4.5f, -4.61f), { 8 * k, 8 * k }, 0, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_LARGE });
-    sink->AddLine(pt(4.5f, -7));
-    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
-    if (FAILED(sink->Close())) return;
-
-    brush->SetColor(ink);
-    dc->DrawLine(pt(0, -10.5f), pt(0, -19), brush.Get(), line);        // cord
-    dc->DrawLine(pt(-3.5f, -10.5f), pt(3.5f, -10.5f), brush.Get(), line);   // base
-    if (lit) {
-        dc->FillGeometry(glass.Get(), brush.Get());
-        const float rays[5][4] = { { 0, 15, 0, 19 }, { -9.2f, 11.2f, -12, 14 }, { 9.2f, 11.2f, 12, 14 },
-                                   { -12, 2, -16, 2 }, { 12, 2, 16, 2 } };
-        for (auto& ray : rays) dc->DrawLine(pt(ray[0], ray[1]), pt(ray[2], ray[3]), brush.Get(), line);
-    } else {
-        dc->DrawGeometry(glass.Get(), brush.Get(), line);
-    }
-}

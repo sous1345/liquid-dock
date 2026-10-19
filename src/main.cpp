@@ -10,6 +10,7 @@
 #include <shellapi.h>
 #include <thread>
 #include "oled.h"
+#include "buttons.h"
 #include "settings_window.h"
 
 Settings g_settings;
@@ -405,6 +406,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
         }
 
         g_apps.Tick(now);
+        features::Tick(now);
         g_sys.Tick(now);
         g_sensors.Tick(now);
 
