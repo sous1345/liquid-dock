@@ -50,6 +50,14 @@ static int desktopActions=0;
 namespace nativetray {
 static bool MatrixToggleDesktop(){++desktopActions;return true;}
 }
+// OLED mode stubs: the matrix never changes the real wallpaper or desktop icons
+static int oledActions=0; static bool oledOn=false;
+namespace oled {
+bool Active(){return oledOn;}
+bool Enable(HMONITOR){++oledActions;oledOn=true;return true;}
+bool Disable(){++oledActions;oledOn=false;return true;}
+void Reapply(){}
+}
 #define GetMonitorInfoW MatrixMonitorInfo
 #define GetForegroundWindow MatrixForeground
 #define MonitorFromWindow MatrixMonitorFromWindow
@@ -152,7 +160,15 @@ static void AssertHitGeometry(Dock& d) {
   POINT local={(LONG)px.x,(LONG)px.y};
   Check(PtInRect(&d.curRegion,local)!=0,"desktop button remains inside active input region");
  }else Check(d.desktopU0==d.desktopU1,"disabled desktop button reserves no space");
- Check(d.settingsU0>=d.desktopU1 && d.settingsU1<=d.barU1,"settings button is at the end without overlapping other controls");
+ if(g_settings.showOledButton){
+  auto px=d.W((d.oledU0+d.oledU1)/2,d.margin+d.barThick/2-d.hideOff);
+  float u,v;d.ClientToUV((int)px.x,(int)px.y,u,v);
+  Check(d.HitTestUV(u,v).kind==Dock::HitOled,"OLED button drawing matches its click target");
+  Check(d.oledU0>=d.desktopU1 && d.oledU1<=d.settingsU0,"OLED button sits between desktop and settings buttons");
+  int before=oledActions;d.Click({Dock::HitOled,-1});d.Click({Dock::HitOled,-1});
+  Check(oledActions-before==2 && !oledOn,"OLED button toggles on and back off");
+ }else Check(d.oledU0==d.oledU1,"hidden OLED button reserves no space");
+ Check(d.settingsU0>=d.oledU1 && d.settingsU1<=d.barU1,"settings button is at the end without overlapping other controls");
  Check(d.settingsU1-d.settingsU0>=32*d.scale-0.1f,"settings button retains its minimum target width in crowded layouts");
  for(float along:{0.05f,0.5f,0.95f})for(float across:{0.1f,0.5f,0.9f}){
   auto px=d.W(lerpf(d.settingsU0,d.settingsU1,along),d.margin+d.barThick*across-d.hideOff);
@@ -478,7 +494,7 @@ int wmain(int argc,wchar_t** argv) {
  for(int spacing=0;spacing<3;++spacing)for(bool desktop:{false,true})for(bool crowded:{false,true}){
   ++cases;caseFailures=0;
   std::ostringstream label;label<<"options "<<monitor.name<<" edge="<<edge<<" clock="<<clock<<" spacing="<<spacing<<" desktop="<<desktop<<" crowded="<<crowded;caseLabel=label.str();
-  g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.clockSize=clock;g_settings.iconSpacing=spacing;g_settings.showDesktopButton=desktop;
+  g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.clockSize=clock;g_settings.iconSpacing=spacing;g_settings.showDesktopButton=desktop;g_settings.showOledButton=((edge+clock+spacing)&1)!=0;
   g_settings.iconSize=crowded?54.f:36.f;g_settings.magnification=crowded?2.1f:1.7f;
   Apps(crowded?40:12);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);OptionsTests(d);SweepTests(d);DragSpacingTests(d);
   report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";

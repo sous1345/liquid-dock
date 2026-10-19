@@ -6,6 +6,7 @@
 #include <thread>
 #include <shellapi.h>
 #include <d2d1effects.h>
+#include "oled.h"
 
 extern HWND g_mainWnd;
 constexpr UINT WM_APP_REBUILD = WM_APP + 1;
@@ -260,6 +261,7 @@ Dock::LayoutMetrics Dock::MeasureMetrics(float fitFactor) {
     m.sensor = vert ? m.icon * 1.3f
                     : TextWidth(g_gfx.fmtClockSmall.Get(), L"CPU 100°") + 16 * scale;
     m.desktop = g_settings.showDesktopButton ? std::max(m.icon * 0.55f, minButton) : 0;
+    m.oled = g_settings.showOledButton ? std::max(m.icon * 0.55f, minButton) : 0;
     // Always available, with a generous cell independent of crowded app icons.
     m.settings = std::max(m.icon * 0.65f, 32 * scale);
     return m;
@@ -375,7 +377,8 @@ void Dock::Layout(double) {
     clkU0 = volU1; clkU1 = clkU0 + metrics.clock;
     sensU0 = clkU1; sensU1 = sensU0 + metrics.sensor;
     desktopU0 = sensU1; desktopU1 = desktopU0 + metrics.desktop;
-    settingsU0 = desktopU1; settingsU1 = settingsU0 + metrics.settings;
+    oledU0 = desktopU1; oledU1 = oledU0 + metrics.oled;
+    settingsU0 = oledU1; settingsU1 = settingsU0 + metrics.settings;
     barU0 = start; barU1 = settingsU1 + pad;
 }
 
@@ -465,6 +468,7 @@ Dock::Hit Dock::HitTestUV(float u, float v) {
     else if (u >= clkU0 && u < clkU1) h.kind = HitClock;
     else if (u >= sensU0 && u < sensU1) h.kind = HitSensor;
     else if (g_settings.showDesktopButton && u >= desktopU0 && u < desktopU1) h.kind = HitDesktop;
+    else if (g_settings.showOledButton && u >= oledU0 && u < oledU1) h.kind = HitOled;
     else if (u >= settingsU0 && u <= barU1) h.kind = HitSettings;
     else h.kind = HitBar;
     return h;
@@ -747,6 +751,9 @@ void Dock::Update(double now, float dt, POINT cursor) {
     } else if (hoverKind == HitDesktop) {
         tip = L"바탕화면 보기 / 창 복원";
         tooltipU = (desktopU0 + desktopU1) * 0.5f; tooltipV = margin + barThick + 8 * scale - hideOff;
+    } else if (hoverKind == HitOled) {
+        tip = oled::Active() ? L"OLED 모드 끄기" : L"OLED 모드 켜기 (검은 배경 · 아이콘 숨김)";
+        tooltipU = (oledU0 + oledU1) * 0.5f; tooltipV = margin + barThick + 8 * scale - hideOff;
     } else if (hoverKind == HitSettings) {
         tip = L"설정";
         tooltipU = (settingsU0 + settingsU1) * 0.5f; tooltipV = margin + barThick + 8 * scale - hideOff;
@@ -1220,6 +1227,7 @@ void Dock::Render() {
         };
         hover(HitTray, trayU0, trayU1); hover(HitNet, netU0, netU1); hover(HitVol, volU0, volU1); hover(HitClock, clkU0, clkU1); hover(HitSensor, sensU0, sensU1);
         if (g_settings.showDesktopButton) hover(HitDesktop, desktopU0, desktopU1);
+        if (g_settings.showOledButton) hover(HitOled, oledU0, oledU1);
         hover(HitSettings, settingsU0, barU1);
         DrawSensorCell(v0, v1, vis);
 
@@ -1265,6 +1273,7 @@ void Dock::Render() {
             dc->DrawLine({ p.x, p.y + 4 * scale }, { p.x, p.y + 7 * scale }, brush.Get(), 1.4f * scale);
             dc->DrawLine({ p.x - 4 * scale, p.y + 7 * scale }, { p.x + 4 * scale, p.y + 7 * scale }, brush.Get(), 1.4f * scale);
         }
+        if (g_settings.showOledButton) DrawOledButton(v0, v1, vis);
     }
 
     // dragged icon follows the cursor
@@ -1371,6 +1380,9 @@ void Dock::Click(const Hit& h) {
     case HitClock: nativetray::OpenCalendar(); break;
     case HitDesktop:
         if (g_settings.showDesktopButton) nativetray::ToggleDesktop();
+        break;
+    case HitOled:
+        if (g_settings.showOledButton) ToggleOled();
         break;
     case HitSettings: ShowDockMenu(); break;
     case HitSensor: case HitPanel:
@@ -1496,10 +1508,45 @@ void Dock::ShowTrayMenu(HitKind kind) {
     }
 }
 
+void Dock::ToggleOled() {
+    bool ok = oled::Active() ? oled::Disable() : oled::Enable(g_settings.oledOneMonitor ? monitor : nullptr);
+    if (!ok) MessageBoxW(hwnd, L"OLED 모드를 바꾸지 못했습니다. 잠시 후 다시 시도해 주세요.", L"Liquid Dock", MB_OK | MB_ICONINFORMATION);
+    dirty = true;
+}
+
+// Three bars (red, green, blue: an OLED subpixel) leaning 35 degrees inside one rounded
+// outline; grey ink while the mode is off. Kept upright on every edge, like the desktop button.
+void Dock::DrawOledButton(float v0, float v1, float vis) {
+    auto* dc = g_gfx.dc.Get();
+    float ou = (oledU0 + oledU1) * 0.5f;
+    auto p = W(ou, (v0 + v1) * 0.5f);
+    float w = 13 * scale, h = 15 * scale;
+    D2D1_RECT_F r = { p.x - w / 2, p.y - h / 2, p.x + w / 2, p.y + h / 2 };
+    ComPtr<ID2D1RoundedRectangleGeometry> shape;
+    if (FAILED(g_gfx.d2dFactory->CreateRoundedRectangleGeometry({ r, 2.6f * scale, 2.6f * scale }, &shape))) return;
+
+    D2D1_COLOR_F c[3];
+    if (oled::Active()) {
+        c[0] = D2D1::ColorF(0xFF3B30, vis); c[1] = D2D1::ColorF(0x5BC22A, vis); c[2] = D2D1::ColorF(0x4459F0, vis);
+    } else {
+        const float a[3] = { 0.55f, 0.75f, 0.95f };
+        for (int i = 0; i < 3; ++i) { c[i] = Ink(ou, vis); c[i].a *= a[i]; }
+    }
+    // hard colour stops: one gradient brush paints all three bars
+    D2D1_GRADIENT_STOP stops[6] = { { 0, c[0] }, { 1 / 3.0f, c[0] }, { 1 / 3.0f, c[1] }, { 2 / 3.0f, c[1] }, { 2 / 3.0f, c[2] }, { 1, c[2] } };
+    ComPtr<ID2D1GradientStopCollection> coll;
+    ComPtr<ID2D1LinearGradientBrush> fill;
+    if (FAILED(dc->CreateGradientStopCollection(stops, 6, &coll)) ||
+        FAILED(dc->CreateLinearGradientBrush({ { r.left, p.y }, { r.right, p.y } }, coll.Get(), &fill))) return;
+    dc->SetTransform(D2D1::Matrix3x2F::Skew(-35, 0, p));
+    dc->FillGeometry(shape.Get(), fill.Get());
+    dc->SetTransform(D2D1::Matrix3x2F::Identity());
+}
+
 void Dock::ShowDockMenu() {
     HMENU m = CreatePopupMenu();
     HMENU pos = CreatePopupMenu(), size = CreatePopupMenu(), mg = CreatePopupMenu(), gl = CreatePopupMenu(), dl = CreatePopupMenu();
-    HMENU clock = CreatePopupMenu(), spacing = CreatePopupMenu();
+    HMENU clock = CreatePopupMenu(), spacing = CreatePopupMenu(), om = CreatePopupMenu();
     auto chk = [](bool b) { return MF_STRING | (b ? MF_CHECKED : 0); };
     AppendMenuW(pos, chk(g_settings.edge == Edge::Bottom), 10, L"아래");
     AppendMenuW(pos, chk(g_settings.edge == Edge::Left), 11, L"왼쪽");
@@ -1528,6 +1575,13 @@ void Dock::ShowDockMenu() {
     AppendMenuW(m, MF_POPUP, (UINT_PTR)spacing, L"아이콘 간격");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)clock, L"시계 글자 크기");
     AppendMenuW(m, chk(g_settings.showDesktopButton), 82, L"바탕화면 보기 버튼");
+    AppendMenuW(om, chk(oled::Active()), 83, L"OLED 모드 켜기 (검은 배경 · 아이콘 숨김)");
+    AppendMenuW(om, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(om, chk(!g_settings.oledOneMonitor), 84, L"모든 모니터");
+    AppendMenuW(om, chk(g_settings.oledOneMonitor), 85, L"이 모니터만");
+    AppendMenuW(om, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(om, chk(g_settings.showOledButton), 86, L"독에 OLED 버튼 표시");
+    AppendMenuW(m, MF_POPUP | (oled::Active() ? MF_CHECKED : 0), (UINT_PTR)om, L"OLED 모드");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)mg, L"확대 효과");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)gl, L"유리 질감");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)dl, L"나타나는 속도");
@@ -1567,6 +1621,9 @@ void Dock::ShowDockMenu() {
     case 99: PostMessageW(g_mainWnd, WM_CLOSE, 0, 0); break;
     case 80: case 81: g_settings.clockSize = cmd - 80; rebuild = true; break;
     case 82: g_settings.showDesktopButton = !g_settings.showDesktopButton; rebuild = true; break;
+    case 83: ToggleOled(); break;
+    case 84: case 85: g_settings.oledOneMonitor = cmd == 85; break;
+    case 86: g_settings.showOledButton = !g_settings.showOledButton; rebuild = true; break;
     case 90: case 91: case 92: g_settings.iconSpacing = cmd - 90; rebuild = true; break;
     }
     if (cmd) g_settings.Save();

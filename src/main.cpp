@@ -9,6 +9,7 @@
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <thread>
+#include "oled.h"
 
 Settings g_settings;
 HWND g_mainWnd = nullptr;
@@ -115,6 +116,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         // A restored taskbar must stay available while the dock is unavailable or exiting.
         if (g_running && g_docksReady && WatchdogReady()) g_taskbar.Hide();
         else g_taskbar.Restore();
+        oled::Reapply();   // a new Explorer shows the desktop icons again
         return 0;
     }
     switch (m) {
@@ -308,6 +310,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
             }
             if (p) CloseHandle(p);
         }
+        // uninstall and the restore shortcut put the wallpaper and desktop icons back too
+        if (args.find(L"--restore") != std::wstring::npos) oled::Disable();
         return RestoreTaskbarWhenIdle(5000);
     }
 
@@ -347,6 +351,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
     g_taskbar.StartEnforcer();
     if (!StartWatchdog()) Log(L"watchdog not ready; keeping native taskbar");
     BuildDocks();
+    oled::Reapply();
     if (g_settings.autostart) SetAutostart(true);
     // right after installing: show the dock for a few seconds so people see where it is
     double welcomeUntil = args.find(L"--welcome") != std::wstring::npos ? NowSeconds() + 3.5 : 0;
