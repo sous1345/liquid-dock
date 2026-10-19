@@ -665,7 +665,7 @@ void AppModel::ActivateWindow(HWND h) {
     }
 }
 
-void AppModel::Launch(AppItem& a, int dockIndex) {
+void AppModel::Launch(AppItem& a, int dockIndex, bool elevated) {
     std::wstring target = a.launch;
     if (target.empty()) target = !a.aumid.empty() ? L"shell:AppsFolder\\" + a.aumid : a.exe;
     if (EndsWithI(target, L".lnk") && GetFileAttributesW(target.c_str()) == INVALID_FILE_ATTRIBUTES && !a.exe.empty())
@@ -674,6 +674,7 @@ void AppModel::Launch(AppItem& a, int dockIndex) {
     SHELLEXECUTEINFOW sei = { sizeof(sei) };
     sei.fMask = SEE_MASK_ASYNCOK | SEE_MASK_FLAG_NO_UI;
     sei.lpFile = target.c_str();
+    if (elevated && target.rfind(L"shell:", 0) != 0) sei.lpVerb = L"runas";   // Windows shows its own consent prompt
     sei.nShow = SW_SHOWNORMAL;
     if (ShellExecuteExW(&sei)) {
         a.launchStarted = NowSeconds();

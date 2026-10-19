@@ -33,7 +33,7 @@ public:
     void OnShellHook(WPARAM code, LPARAM lp);
 
     void Click(AppItem& a, int dockIndex);
-    void Launch(AppItem& a, int dockIndex);
+    void Launch(AppItem& a, int dockIndex, bool elevated = false);   // elevated: "run as administrator" (not for store apps)
     void ActivateWindow(HWND h);
     void CloseAll(AppItem& a);
     void SetPinned(AppItem& a, bool pinned);

@@ -110,6 +110,22 @@ static void SetAutostart(bool on) {
     }).detach();
 }
 
+// The optional shortcut that shows the dock (settings: revealHotkey).
+static constexpr int kRevealHotkeyId = 2;
+static bool g_revealHotkeyFailed = false;
+bool RevealHotkeyFailed() { return g_revealHotkeyFailed; }
+static void ApplyRevealHotkey() {
+    UnregisterHotKey(g_mainWnd, kRevealHotkeyId);
+    g_revealHotkeyFailed = false;
+    struct Combo { UINT mods, vk; } combos[] = { {}, { MOD_CONTROL | MOD_ALT, 'D' }, { MOD_CONTROL | MOD_SHIFT, VK_SPACE }, { MOD_WIN | MOD_SHIFT, 'D' } };
+    int i = std::clamp(g_settings.revealHotkey, 0, 3);
+    if (i == 0) return;
+    if (!RegisterHotKey(g_mainWnd, kRevealHotkeyId, combos[i].mods | MOD_NOREPEAT, combos[i].vk)) {
+        g_revealHotkeyFailed = true;   // another program owns that combination
+        Log(L"reveal hotkey %d unavailable (%lu)", i, GetLastError());
+    }
+}
+
 static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == g_msgShellHook && g_msgShellHook) { g_apps.OnShellHook(w, l); return 0; }
     if (m == g_msgTaskbarCreated && g_msgTaskbarCreated) {
@@ -188,7 +204,16 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     case WM_APP + 12: for (auto& d : g_docks) d->RequestSnapshot(); return 0;
     case WM_HOTKEY:
-        g_running = false;
+        if (w == kRevealHotkeyId) {   // show the dock under the pointer
+            POINT p; GetCursorPos(&p);
+            HMONITOR m = MonitorFromPoint(p, MONITOR_DEFAULTTOPRIMARY);
+            for (auto& d : g_docks) if (d->monitor == m) d->HotkeyReveal(NowSeconds());
+            return 0;
+        }
+        g_running = false;   // the emergency exit, Ctrl+Alt+Shift+F12
+        return 0;
+    case WM_APP_HOTKEY:
+        ApplyRevealHotkey();
         return 0;
     case WM_QUERYENDSESSION:
         return TRUE;
@@ -355,6 +380,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
     RegisterShellHookWindow(g_mainWnd);
     // emergency exit: Ctrl+Alt+Shift+F12
     RegisterHotKey(g_mainWnd, 1, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, VK_F12);
+    ApplyRevealHotkey();
 
     g_apps.Init();
     g_sys.Tick(NowSeconds());

@@ -645,6 +645,33 @@ int wmain(int argc,wchar_t** argv) {
   Check(d.reveal.target==1,"auto-hide off: leaving the dock does not hide it");
   report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
  }
+ // Quiet button and the reveal shortcut, on every monitor and edge.
+ for(const auto& monitor:monitors)for(int edge=0;edge<4;++edge){
+  ++cases;caseFailures=0;
+  std::ostringstream label;label<<"features "<<monitor.name<<" edge="<<edge;caseLabel=label.str();
+  g_settings=Settings{};g_settings.edge=(Edge)edge;
+  Apps(10);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);
+  if(monitor.primary){
+   auto& s=d.slots[3];
+   features::SetQuiet(1e300);
+   g_apps.attentionEvents.push_back({s.app->id});Advance(d,Outside(d.mon),0.1);g_apps.attentionEvents.clear();
+   Check(s.bounceCount==0 && !s.bounceLoop,"quiet: a notification does not bounce the icon");
+   features::SetQuiet(0);
+   g_apps.attentionEvents.push_back({s.app->id});Advance(d,Outside(d.mon),0.1);g_apps.attentionEvents.clear();
+   Check(s.bounceCount>0,"quiet off: notifications bounce again");
+   ResetHidden(d);
+  }
+  d.HotkeyReveal(simTime);Advance(d,Outside(d.mon),1.0);
+  Check(d.reveal.target==1 && d.reveal.x>0.9f,"shortcut: the dock comes out without the pointer at the edge");
+  Advance(d,Outside(d.mon),3.0);
+  Check(d.reveal.target==0,"shortcut: it goes away again when the pointer never came");
+  d.HotkeyReveal(simTime);Advance(d,Outside(d.mon),0.5);d.HotkeyReveal(simTime);Advance(d,Outside(d.mon),0.5);
+  Check(d.reveal.target==0,"shortcut pressed again puts the dock away");
+  d.HotkeyReveal(simTime);
+  auto p=d.ScreenPointUV(d.slots[1].u,d.margin+d.barThick/2);Advance(d,p,4.0);
+  Check(d.reveal.target==1,"shortcut: the dock stays while the pointer is on it");
+  report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
+ }
  RenderOptions(actualCount);
  report<<"TOTAL\t"<<cases<<"\t"<<checks<<"\t"<<failures<<"\n";report.close();
  printf("RESULT cases=%d checks=%d failed_checks=%d; synthetic input tests; render fixtures=%d\n",cases,checks,failures,actualCount*64);

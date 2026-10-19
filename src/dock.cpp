@@ -105,6 +105,15 @@ void Dock::UpdateAppBar(bool want) {
     appBarRect = r;
 }
 
+void Dock::HotkeyReveal(double now) {
+    if (reveal.target > 0.5f) { reveal.target = 0; hotkeyHoldUntil = 0; edgeSince = -1; return; }   // pressed again: away
+    hotkeyHoldUntil = now + 3;
+    reveal.target = 1; outsideSince = -1;
+    lastCaptureWanted = now;
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    dirty = true;
+}
+
 bool Dock::Relayout() {
     int x = winX, y = winY, w = winW, h = winH;
     float keepFit = fit;   // a crowded dock keeps its current shrink instead of animating it again
@@ -362,7 +371,7 @@ void Dock::Update(double now, float dt, POINT cursor) {
          CursorInPanel() ||
          (panelAlpha.target > 0.5f && cursorU >= cells[HitSensor].u0 - 4 * scale && cursorU <= cells[HitSensor].u1 + 4 * scale &&
           cursorV <= margin + barThick + 16 * scale));   // bridge between cell and panel
-    bool keep = menuOpen || dragging || pressSlot >= 0 || debugForceShow || settingsOpen;
+    bool keep = menuOpen || dragging || pressSlot >= 0 || debugForceShow || settingsOpen || now < hotkeyHoldUntil;
     bool fullscreen = FullscreenAppActive();
     bool inPreview = windowPreview.Contains(cursor);
     if (debugForceShow || settingsOpen) reveal.target = 1;
@@ -643,7 +652,8 @@ void Dock::Click(const Hit& h) {
         auto& s = slots[h.slot];
         if (!s.app) { SendKeyCombo({ VK_LWIN }); return; }
         auto app = s.app;
-        g_apps.Click(*app, index);
+        if (g_settings.shiftRunsAsAdmin && (GetKeyState(VK_SHIFT) & 0x8000)) g_apps.Launch(*app, index, true);
+        else g_apps.Click(*app, index);
         break;
     }
     // Windows' own tray windows rather than re-implementations
@@ -719,6 +729,7 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         float u, v; ClientToUV(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), u, v);
         Hit h = HitTestUV(u, v);
         if (h.kind == HitSlot && slots[h.slot].app) ShowAppMenu(slots[h.slot]);
+        else if (h.kind == HitSlot && g_settings.startMenuExtras) ShowStartMenu();
         else if (h.kind == HitButton && Button(h.button).rightClick) (this->*Button(h.button).rightClick)();
         else if (h.kind == HitClock || h.kind == HitSensor || h.kind == HitPanel) ShowTrayMenu(h);
         else ShowDockMenu();

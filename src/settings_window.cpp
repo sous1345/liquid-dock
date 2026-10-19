@@ -133,6 +133,14 @@ void BuildPages() {
         { Control::Toggle, L"Windows 시작 시 자동 실행", nullptr, Apply::None, {}, {}, {}, 0, 1, 1, {}, {}, {},
           [] { return g_settings.autostart; },
           [](bool v) { g_settings.autostart = v; PostMessageW(g_mainWnd, WM_APP_AUTOSTART, 0, 0); } },
+        { Control::Segmented, L"독 열기 단축키", L"다른 프로그램이 이미 쓰는 조합이면 동작하지 않습니다", Apply::None,
+          { L"끄기", L"Ctrl+Alt+D", L"Ctrl+Shift+Space", L"Win+Shift+D" },
+          [] { return std::clamp(g_settings.revealHotkey, 0, 3); },
+          [](int i) { g_settings.revealHotkey = i; PostMessageW(g_mainWnd, WM_APP_HOTKEY, 0, 0); } },
+        { Control::Toggle, L"시작 버튼 우클릭 메뉴", L"작업 관리자, 실행, 잠금·절전·다시 시작·종료", Apply::None, {}, {}, {}, 0, 1, 1, {}, {}, {},
+          [] { return g_settings.startMenuExtras; }, [](bool v) { g_settings.startMenuExtras = v; } },
+        { Control::Toggle, L"Shift+클릭으로 관리자 권한 실행", L"독의 앱 아이콘을 Shift를 누른 채 클릭 (스토어 앱 제외)", Apply::None, {}, {}, {}, 0, 1, 1, {}, {}, {},
+          [] { return g_settings.shiftRunsAsAdmin; }, [](bool v) { g_settings.shiftRunsAsAdmin = v; } },
         { Control::Toggle, L"CPU 온도 표시", L"관리자 승인 한 번과 PawnIO 드라이버가 필요합니다", Apply::None, {}, {}, {}, 0, 1, 1, {}, {}, {},
           [] { return g_settings.cpuTemp; },
           [](bool v) { if (!v) g_settings.cpuTemp = false; else g_sensors.EnableCpuTemp(g_wnd); } },
@@ -158,7 +166,7 @@ ComPtr<ID2D1Bitmap1> g_target;
 ComPtr<IDCompositionTarget> g_compTarget;
 ComPtr<IDCompositionVisual> g_visual;
 ComPtr<ID2D1SolidColorBrush> g_brush;
-ComPtr<IDWriteTextFormat> g_fTitle, g_fNavTitle, g_fNav, g_fLabel, g_fValue, g_fHint, g_fGlyph, g_fSeg;
+ComPtr<IDWriteTextFormat> g_fTitle, g_fNavTitle, g_fNav, g_fLabel, g_fValue, g_fHint, g_fGlyph, g_fSeg, g_fSegSmall;
 
 // layout in DIPs
 constexpr float kW = 660, kH = 600, kNav = 176, kPad = 32;
@@ -225,6 +233,8 @@ bool CreateResources() {
     g_fHint = Font(12.5f, DWRITE_FONT_WEIGHT_NORMAL);
     g_fSeg = Font(14, DWRITE_FONT_WEIGHT_NORMAL);
     g_fSeg->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    g_fSegSmall = Font(12, DWRITE_FONT_WEIGHT_NORMAL);   // long choices (key combinations) in narrow segments
+    g_fSegSmall->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     // the icon font the dock resolved (Segoe Fluent Icons, or MDL2 Assets on Windows 10)
     wchar_t family[64] = L"Segoe Fluent Icons";
     if (g_gfx.fmtGlyph) g_gfx.fmtGlyph->GetFontFamilyName(family, ARRAYSIZE(family));
@@ -234,7 +244,7 @@ bool CreateResources() {
 
 void Release() {
     g_target.Reset(); g_swap.Reset(); g_visual.Reset(); g_compTarget.Reset(); g_brush.Reset();
-    g_fTitle.Reset(); g_fNavTitle.Reset(); g_fNav.Reset(); g_fLabel.Reset(); g_fValue.Reset(); g_fHint.Reset(); g_fSeg.Reset(); g_fGlyph.Reset();
+    g_fTitle.Reset(); g_fNavTitle.Reset(); g_fNav.Reset(); g_fLabel.Reset(); g_fValue.Reset(); g_fHint.Reset(); g_fSeg.Reset(); g_fSegSmall.Reset(); g_fGlyph.Reset();
 }
 
 // ---------------------------------------------------------------- drawing
@@ -308,7 +318,7 @@ void Render() {
                 D2D1_RECT_F r = { bar.left + 2 + i * w, bar.top + 2, bar.left + 2 + (i + 1) * w, bar.bottom - 2 };
                 if (i == cur) Fill(r, g_dark ? ColorF(1, 1, 1, 0.16f) : ColorF(1, 1, 1, 0.95f), 4);
                 else if (hot && g_hoverSub == i) Fill(r, Wash(0.05f), 4);
-                Draw(c.options[i], g_fSeg.Get(), r, i == cur ? Text() : Text(0.8f));
+                Draw(c.options[i], (r.right - r.left) < wcslen(c.options[i]) * 8.5f ? g_fSegSmall.Get() : g_fSeg.Get(), r, i == cur ? Text() : Text(0.8f));
                 if (i == cur) Fill({ (r.left + r.right) / 2 - 8, r.bottom - 3, (r.left + r.right) / 2 + 8, r.bottom - 1 }, g_accent, 1);
                 g_hots.push_back({ r, ci, i });
             }

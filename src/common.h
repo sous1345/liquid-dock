@@ -77,6 +77,9 @@ struct Settings {
     float showDelay = 0.05f;    // seconds at edge before reveal
     float hideDelay = 0.35f;    // seconds outside before hide
     bool  autostart = false;
+    bool  startMenuExtras = true;   // right-click on the start button: power and system menu
+    bool  shiftRunsAsAdmin = true;  // Shift+click on an app icon runs it as administrator
+    int   revealHotkey = 0;         // 0 off, 1 Ctrl+Alt+D, 2 Ctrl+Shift+Space, 3 Win+Shift+D
     bool  cpuTemp = false;      // opt-in: elevated helper + PawnIO driver
     int   pinsVersion = 0;      // 2 = store-app pins imported
     void Load();

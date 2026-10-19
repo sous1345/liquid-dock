@@ -13,6 +13,8 @@ constexpr UINT WM_APP_REBUILD = WM_APP + 1;
 constexpr UINT WM_APP_AUTOSTART = WM_APP + 2;
 constexpr UINT WM_APP_RELAYOUT = WM_APP + 3;    // shape settings changed: lay the docks out again in place
 constexpr UINT WM_APP_SETTINGS = WM_APP + 4;    // open the settings window
+constexpr UINT WM_APP_HOTKEY = WM_APP + 5;      // the reveal shortcut setting changed
+bool RevealHotkeyFailed();                       // the chosen shortcut belongs to another program
 constexpr UINT WM_APP_APPBAR = WM_APP + 40;     // shell notifications for an always-shown dock
 
 void OpenTaskManager();
@@ -35,6 +37,7 @@ public:
     static inline bool debugForcePanel = false;
     static inline bool settingsOpen = false;   // the shape settings window keeps every dock shown
     bool Relayout();                           // false: the window must be recreated instead
+    void HotkeyReveal(double now);             // the reveal shortcut: show (or put away) this dock
     HWND hwnd = nullptr;
     HMONITOR monitor;
     int index;
@@ -158,6 +161,7 @@ private:
     // ---- menus (dock_controls.cpp)
     void ShowAppMenu(Slot& s);
     void ShowDockMenu();
+    void ShowStartMenu();              // right-click on the start button: power and system
     void ShowTrayMenu(const Hit& h);   // network, volume, clock, sensor
     int  PopupMenu(HMENU m);
     void ToggleOled();
@@ -185,6 +189,7 @@ private:
     Spring reveal, magAmount, tooltipAlpha;
     float hoverU = 0, cursorU = -1, cursorV = 1e9;
     double edgeSince = -1, outsideSince = -1;
+    double hotkeyHoldUntil = 0;            // shown by the shortcut: stays until then (or while the pointer is on it)
     double lastCaptureWanted = -1e9, nextCaptureTry = 0;
     bool menuOpen = false;
     bool busy = false, dirty = true;

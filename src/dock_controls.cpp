@@ -270,6 +270,56 @@ void Dock::ClickAudio() {
 
 void Dock::MenuAudio() { OpenUri(L"ms-settings:sound"); }
 
+// ---------------------------------------------------------------- start button menu
+
+namespace {
+// Logging off, restarting and shutting down need the shutdown privilege switched on for this process.
+bool EnableShutdownPrivilege() {
+    HANDLE token;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) return false;
+    TOKEN_PRIVILEGES tp = { 1 };
+    LookupPrivilegeValueW(nullptr, SE_SHUTDOWN_NAME, &tp.Privileges[0].Luid);
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    bool ok = AdjustTokenPrivileges(token, FALSE, &tp, 0, nullptr, nullptr) && GetLastError() == ERROR_SUCCESS;
+    CloseHandle(token);
+    return ok;
+}
+void Power(UINT how) {
+    EnableShutdownPrivilege();
+    if (!ExitWindowsEx(how, SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_FLAG_PLANNED)) Log(L"power: ExitWindowsEx %u failed %lu", how, GetLastError());
+}
+void Sleep_() {
+    EnableShutdownPrivilege();
+    using Fn = BOOLEAN(WINAPI*)(BOOLEAN, BOOLEAN, BOOLEAN);
+    HMODULE p = LoadLibraryExW(L"powrprof.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    auto suspend = p ? (Fn)GetProcAddress(p, "SetSuspendState") : nullptr;
+    if (!suspend || !suspend(FALSE, FALSE, FALSE)) Log(L"power: sleep failed %lu", GetLastError());
+}
+void OpenSystemExe(const wchar_t* exe, const wchar_t* args = nullptr) {
+    wchar_t dir[MAX_PATH]; GetWindowsDirectoryW(dir, MAX_PATH);
+    std::wstring path = std::wstring(dir) + (wcscmp(exe, L"explorer.exe") == 0 ? L"\\" : L"\\System32\\") + exe;
+    ShellExecuteW(nullptr, L"open", path.c_str(), args, nullptr, SW_SHOWNORMAL);
+}
+}
+
+// The Win+X essentials. Nothing here runs without a click on the item.
+void Dock::ShowStartMenu() {
+    MenuBuilder mb;
+    HMENU m = mb.root;
+    mb.Item(m, L"작업 관리자", [] { OpenTaskManager(); });
+    mb.Item(m, L"파일 탐색기", [] { OpenSystemExe(L"explorer.exe"); });
+    mb.Item(m, L"설정", [] { OpenUri(L"ms-settings:"); });
+    mb.Item(m, L"실행", [] { OpenSystemExe(L"explorer.exe", L"Shell:::{2559a1f3-21d7-11d4-bdaf-00c04f60b9f0}"); });
+    mb.Separator(m);
+    HMENU power = mb.Sub();
+    mb.Item(power, L"잠금", [] { LockWorkStation(); });
+    mb.Item(power, L"로그아웃", [] { Power(EWX_LOGOFF); });
+    mb.Item(power, L"절전", [] { Sleep_(); });
+    mb.Item(power, L"다시 시작", [] { Power(EWX_REBOOT); });
+    mb.Item(power, L"시스템 종료", [] { Power(EWX_POWEROFF); });
+    mb.Popup(m, power, L"전원");
+    mb.Run(PopupMenu(m));
+}
 // The quick menu: what people switch often. Everything else is in the settings window.
 void Dock::ShowDockMenu() {
     MenuBuilder mb;

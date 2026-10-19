@@ -104,6 +104,9 @@ const Field kFields[] = {
     { "showDelay", &Settings::showDelay, 0, 2 },
     { "hideDelay", &Settings::hideDelay, 0, 3 },
     { "autostart", &Settings::autostart },
+    { "startMenuExtras", &Settings::startMenuExtras },
+    { "shiftRunsAsAdmin", &Settings::shiftRunsAsAdmin },
+    { "revealHotkey", &Settings::revealHotkey, 0, 3 },
     { "cpuTemp", &Settings::cpuTemp },
     { "pinsVersion", &Settings::pinsVersion, 0, 1000000 },
 };
