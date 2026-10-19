@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <mutex>
+#include <variant>
 
 double NowSeconds() {
     static LARGE_INTEGER freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();
@@ -74,48 +75,74 @@ std::wstring FromUtf8(const std::string& s) {
     return w;
 }
 
+// Every setting is one row: key in settings.ini, member, and the accepted range. Unknown keys and
+// malformed values are ignored, so older and newer files load with defaults for what is missing.
+namespace {
+struct Field {
+    const char* key;
+    std::variant<float Settings::*, int Settings::*, bool Settings::*, Edge Settings::*> member;
+    float lo = 0, hi = 0;   // numeric range (ignored for flags)
+};
+const Field kFields[] = {
+    { "edge", &Settings::edge, 0, 3 },
+    { "iconSize", &Settings::iconSize, 32, 96 },
+    { "magnification", &Settings::magnification, 1, 2.1f },   // above the menu's maximum, crowded icons slide away from the pointer
+    { "glassStyle", &Settings::glassStyle, 0, 2 },
+    { "showDesktopButton", &Settings::showDesktopButton },
+    { "showThemeButton", &Settings::showThemeButton },
+    { "showOledButton", &Settings::showOledButton },
+    { "oledOneMonitor", &Settings::oledOneMonitor },
+    { "clockSize", &Settings::clockSize, 0, 1 },
+    { "iconSpacing", &Settings::iconSpacing, 0, 2 },
+    { "showDelay", &Settings::showDelay, 0, 2 },
+    { "hideDelay", &Settings::hideDelay, 0, 3 },
+    { "autostart", &Settings::autostart },
+    { "cpuTemp", &Settings::cpuTemp },
+    { "pinsVersion", &Settings::pinsVersion, 0, 1000000 },
+};
+}
+
 void Settings::Load() {
     std::ifstream f(AppDataDir() + L"\\settings.ini");
     std::string line;
     while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         auto eq = line.find('=');
         if (eq == std::string::npos) continue;
         std::string k = line.substr(0, eq), v = line.substr(eq + 1);
-        try {
-            if (k == "edge") edge = (Edge)std::clamp(std::stoi(v), 0, 3);
-            else if (k == "iconSize") iconSize = std::clamp(std::stof(v), 32.0f, 96.0f);
-            else if (k == "magnification") magnification = std::clamp(std::stof(v), 1.0f, 2.5f);
-            else if (k == "glassStyle") glassStyle = std::clamp(std::stoi(v), 0, 2);
-            else if (k == "showDesktopButton") showDesktopButton = std::stoi(v) != 0;
-            else if (k == "showThemeButton") showThemeButton = std::stoi(v) != 0;
-            else if (k == "showOledButton") showOledButton = std::stoi(v) != 0;
-            else if (k == "oledOneMonitor") oledOneMonitor = std::stoi(v) != 0;
-            else if (k == "clockSize") clockSize = std::clamp(std::stoi(v), 0, 1);
-            else if (k == "iconSpacing") iconSpacing = std::clamp(std::stoi(v), 0, 2);
-            else if (k == "showDelay") showDelay = std::clamp(std::stof(v), 0.0f, 2.0f);
-            else if (k == "hideDelay") hideDelay = std::clamp(std::stof(v), 0.0f, 3.0f);
-            else if (k == "autostart") autostart = std::stoi(v) != 0;
-            else if (k == "cpuTemp") cpuTemp = std::stoi(v) != 0;
-            else if (k == "pinsVersion") pinsVersion = std::stoi(v);
-        } catch (...) {}
+        for (auto& fd : kFields) {
+            if (k != fd.key) continue;
+            try {
+                std::visit([&](auto m) {
+                    using T = std::remove_cvref_t<decltype(this->*m)>;
+                    if constexpr (std::is_same_v<T, bool>) this->*m = std::stoi(v) != 0;
+                    else if constexpr (std::is_same_v<T, float>) this->*m = std::clamp(std::stof(v), fd.lo, fd.hi);
+                    else if constexpr (std::is_same_v<T, int>) this->*m = std::clamp(std::stoi(v), (int)fd.lo, (int)fd.hi);
+                    else this->*m = (T)std::clamp(std::stoi(v), (int)fd.lo, (int)fd.hi);
+                }, fd.member);
+            } catch (...) {}
+            break;
+        }
     }
 }
 
+// Written to a temporary file and swapped in, so a crash or power loss never leaves a half file.
 void Settings::Save() const {
-    std::ofstream f(AppDataDir() + L"\\settings.ini", std::ios::trunc);
-    f << "edge=" << (int)edge << "\n"
-      << "iconSize=" << iconSize << "\n"
-      << "magnification=" << magnification << "\n"
-      << "glassStyle=" << glassStyle << "\n"
-      << "showDesktopButton=" << (showDesktopButton ? 1 : 0) << "\n"
-      << "showThemeButton=" << (showThemeButton ? 1 : 0) << "\n"
-      << "showOledButton=" << (showOledButton ? 1 : 0) << "\n"
-      << "oledOneMonitor=" << (oledOneMonitor ? 1 : 0) << "\n"
-      << "clockSize=" << clockSize << "\n"
-      << "iconSpacing=" << iconSpacing << "\n"
-      << "showDelay=" << showDelay << "\n"
-      << "hideDelay=" << hideDelay << "\n"
-      << "autostart=" << (autostart ? 1 : 0) << "\n"
-      << "cpuTemp=" << (cpuTemp ? 1 : 0) << "\n"
-      << "pinsVersion=" << pinsVersion << "\n";
+    std::wstring path = AppDataDir() + L"\\settings.ini", tmp = path + L".tmp";
+    {
+        std::ofstream f(tmp, std::ios::trunc);
+        for (auto& fd : kFields) {
+            f << fd.key << "=";
+            std::visit([&](auto m) {
+                using T = std::remove_cvref_t<decltype(this->*m)>;
+                if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, int>) f << (int)(this->*m);
+                else if constexpr (std::is_same_v<T, float>) f << this->*m;
+                else f << (int)(this->*m);
+            }, fd.member);
+            f << "\n";
+        }
+        if (!f.good()) { Log(L"settings: write failed"); return; }
+    }
+    if (!MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        Log(L"settings: replace failed %lu", GetLastError());
 }

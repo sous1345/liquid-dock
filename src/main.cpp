@@ -13,8 +13,6 @@
 
 Settings g_settings;
 HWND g_mainWnd = nullptr;
-constexpr UINT WM_APP_REBUILD = WM_APP + 1;
-constexpr UINT WM_APP_AUTOSTART = WM_APP + 2;
 
 static std::vector<std::unique_ptr<Dock>> g_docks;
 static UINT g_msgShellHook = 0, g_msgTaskbarCreated = 0;

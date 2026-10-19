@@ -76,6 +76,9 @@ bool Toggle(){++themeActions;themeLight=!themeLight;return true;}
 #define TrackPopupMenu MatrixPopupMenu
 #define ToggleDesktop MatrixToggleDesktop
 #include "../src/dock.cpp"
+#include "../src/dock_layout.cpp"
+#include "../src/dock_render.cpp"
+#include "../src/dock_controls.cpp"
 #undef GetMonitorInfoW
 #undef GetForegroundWindow
 #undef MonitorFromWindow
@@ -136,7 +139,7 @@ static void AssertHitGeometry(Dock& d) {
   Check(slot.u0>=-1 && slot.u0+slot.size*slot.weight<=d.len+1,"icons remain inside the monitor edge");
  }
  struct Item {float start,end;Dock::HitKind kind;};
- Item buttons[]={{d.trayU0,d.trayU1,Dock::HitTray},{d.clkU0,d.clkU1,Dock::HitClock},{d.sensU0,d.sensU1,Dock::HitSensor}};
+ Item buttons[]={{d.cells[Dock::HitTray].u0,d.cells[Dock::HitTray].u1,Dock::HitTray},{d.cells[Dock::HitClock].u0,d.cells[Dock::HitClock].u1,Dock::HitClock},{d.cells[Dock::HitSensor].u0,d.cells[Dock::HitSensor].u1,Dock::HitSensor}};
  for(const auto& item:buttons){
   auto px=d.W((item.start+item.end)/2,d.margin+d.barThick/2-d.hideOff);
   float u2,v2;d.ClientToUV((int)px.x,(int)px.y,u2,v2);Check(d.HitTestUV(u2,v2).kind==item.kind,"tray control rendered center maps to its own hit target");
@@ -144,21 +147,21 @@ static void AssertHitGeometry(Dock& d) {
  }
  auto network=d.ButtonRect(Dock::HitNet),volume=d.ButtonRect(Dock::HitVol);
  if(d.stackButtons){
-  Check(d.netU0==d.volU0 && d.netU1==d.volU1 && d.clkU0==d.volU1,"stacked connectivity shares one cell before clock");
+  Check(d.cells[Dock::HitNet].u0==d.cells[Dock::HitVol].u0 && d.cells[Dock::HitNet].u1==d.cells[Dock::HitVol].u1 && d.cells[Dock::HitClock].u0==d.cells[Dock::HitVol].u1,"stacked connectivity shares one cell before clock");
   if(IsVertical(g_settings.edge))Check(network.right<=volume.left+0.1f,"side docks: network left of volume");
   else Check(network.bottom<=volume.top+0.1f,"top and bottom docks: network above volume");
- }else Check(d.netU1==d.volU0 && d.clkU0==d.volU1,"unstacked connectivity keeps two adjacent cells before clock");
+ }else Check(d.cells[Dock::HitNet].u1==d.cells[Dock::HitVol].u0 && d.cells[Dock::HitClock].u0==d.cells[Dock::HitVol].u1,"unstacked connectivity keeps two adjacent cells before clock");
  // every small button: inside the window, a comfortable size, its own click area, no overlap
- struct Btn{Dock::HitKind kind;bool on;float u0,u1;} btns[]={{Dock::HitNet,true,d.netU0,d.netU1},{Dock::HitVol,true,d.volU0,d.volU1},
-  {Dock::HitDesktop,g_settings.showDesktopButton,d.desktopU0,d.desktopU1},{Dock::HitTheme,g_settings.showThemeButton,d.themeU0,d.themeU1},
-  {Dock::HitOled,g_settings.showOledButton,d.oledU0,d.oledU1},{Dock::HitSettings,true,d.settingsU0,d.settingsU1}};
+ struct Btn{Dock::HitKind kind;bool on;float u0,u1;} btns[]={{Dock::HitNet,true,d.cells[Dock::HitNet].u0,d.cells[Dock::HitNet].u1},{Dock::HitVol,true,d.cells[Dock::HitVol].u0,d.cells[Dock::HitVol].u1},
+  {Dock::HitDesktop,g_settings.showDesktopButton,d.cells[Dock::HitDesktop].u0,d.cells[Dock::HitDesktop].u1},{Dock::HitTheme,g_settings.showThemeButton,d.cells[Dock::HitTheme].u0,d.cells[Dock::HitTheme].u1},
+  {Dock::HitOled,g_settings.showOledButton,d.cells[Dock::HitOled].u0,d.cells[Dock::HitOled].u1},{Dock::HitSettings,true,d.cells[Dock::HitSettings].u0,d.cells[Dock::HitSettings].u1}};
  std::vector<D2D1_RECT_F> seen;
  for(auto& b:btns){
   if(!b.on){Check(b.u0==b.u1,"hidden button reserves no space");continue;}
   auto r=d.ButtonRect(b.kind);
   Check(r.left>=0 && r.top>=0 && r.right<=d.winW && r.bottom<=d.winH,"small buttons stay inside dock window");
   Check(std::min(r.right-r.left,r.bottom-r.top)>=22*d.scale-1,"small buttons keep a comfortable click size");
-  Check(b.kind==Dock::HitNet||b.kind==Dock::HitVol||b.u0>=d.sensU1,"utility buttons follow the sensor cell");
+  Check(b.kind==Dock::HitNet||b.kind==Dock::HitVol||b.u0>=d.cells[Dock::HitSensor].u1,"utility buttons follow the sensor cell");
   for(auto& o:seen){
    float ix=std::min(r.right,o.right)-std::max(r.left,o.left),iy=std::min(r.bottom,o.bottom)-std::max(r.top,o.top);
    Check(ix<=0.5f||iy<=0.5f,"small buttons never overlap");
@@ -179,7 +182,7 @@ static void AssertHitGeometry(Dock& d) {
   int before=themeActions;bool was=themeLight;d.Click({Dock::HitTheme,-1});d.Click({Dock::HitTheme,-1});
   Check(themeActions-before==2 && themeLight==was,"theme button flips the mode and back");
  }
- Check(d.settingsU1-d.settingsU0>=32*d.scale-0.1f,"settings button retains its minimum target width in crowded layouts");
+ Check(d.cells[Dock::HitSettings].u1-d.cells[Dock::HitSettings].u0>=32*d.scale-0.1f,"settings button retains its minimum target width in crowded layouts");
  {
   auto r=d.ButtonRect(Dock::HitSettings,true);
   POINT local={(LONG)((r.right+r.left)/2),(LONG)((r.top+r.bottom)/2)};
@@ -188,7 +191,7 @@ static void AssertHitGeometry(Dock& d) {
  {
   // the end padding beside the gear (in the gear's half when it shares a cell)
   auto pr=d.ButtonRect(Dock::HitSettings,true);
-  auto pe=d.W((d.settingsU1+d.barU1)*0.5f,d.margin+d.barThick*0.5f-d.hideOff);
+  auto pe=d.W((d.cells[Dock::HitSettings].u1+d.barU1)*0.5f,d.margin+d.barThick*0.5f-d.hideOff);
   POINT pp=IsVertical(g_settings.edge)?POINT{(LONG)((pr.left+pr.right)*0.5f),(LONG)pe.y}:POINT{(LONG)pe.x,(LONG)((pr.top+pr.bottom)*0.5f)};
   float u,v;d.ClientToUV(pp.x,pp.y,u,v);
   Check(d.HitTestUV(u,v).kind==Dock::HitSettings,"dock-end padding also opens settings");
@@ -230,7 +233,7 @@ static void StateTests(Dock& d) {
  }
  // The sensor popup must be reachable and contained in the target monitor in every orientation.
  ResetHidden(d);d.reveal.snap(1);d.hideOff=0;d.Layout(simTime);d.ComputePanelRect();
- auto sensor=d.ScreenPointUV((d.sensU0+d.sensU1)/2,d.margin+d.barThick/2);
+ auto sensor=d.ScreenPointUV((d.cells[Dock::HitSensor].u0+d.cells[Dock::HitSensor].u1)/2,d.margin+d.barThick/2);
  Advance(d,sensor,0.9);Check(d.panelAlpha.x>0.95f,"sensor hover opens panel");
  Check(d.panelRect.left>=0 && d.panelRect.top>=0 && d.panelRect.right<=d.winW && d.panelRect.bottom<=d.winH,"sensor panel remains inside monitor window");
  auto panel=POINT{d.winX+(LONG)((d.panelRect.left+d.panelRect.right)/2),d.winY+(LONG)((d.panelRect.top+d.panelRect.bottom)/2)};
@@ -313,7 +316,7 @@ static void ReachabilityTests(Dock& d) {
 static void OptionsTests(Dock& d) {
  ResetHidden(d);Advance(d,EdgePoint(d.mon,g_settings.edge,0.5f,0),1.5);
  AssertHitGeometry(d);
- auto clock=d.RectUV(d.clkU0,d.clkU1,d.margin,d.margin+d.barThick);
+ auto clock=d.RectUV(d.cells[Dock::HitClock].u0,d.cells[Dock::HitClock].u1,d.margin,d.margin+d.barThick);
  bool vertical=IsVertical(g_settings.edge);
  auto time=d.TextSize(d.ClockFont(),vertical?g_sys.timeShort:g_sys.timeText);
  auto date=d.TextSize(d.ClockFont(true),g_sys.dateText);
@@ -394,7 +397,7 @@ static void RenderFixture(const MonitorCase& monitor,int edge,int index,int vari
  d.snapshotPending=true;d.dirty=true;d.Render();
  Check(!g_gfx.DeviceLost(),"GPU remains available after normal dock rendering");
  d.index=index+1000;Dock::debugForcePanel=true;d.reveal.snap(1);
- Advance(d,d.ScreenPointUV((d.sensU0+d.sensU1)/2,d.margin+d.barThick/2),1.0);
+ Advance(d,d.ScreenPointUV((d.cells[Dock::HitSensor].u0+d.cells[Dock::HitSensor].u1)/2,d.margin+d.barThick/2),1.0);
  d.snapshotPending=true;d.dirty=true;d.Render();
  Check(!g_gfx.DeviceLost(),"GPU remains available after sensor panel rendering");
  Dock::debugForcePanel=false;
@@ -494,6 +497,12 @@ int wmain(int argc,wchar_t** argv) {
  monitors.push_back({(HMONITOR)(uintptr_t)0x1002,{0,-1440,2560,0},false,false,"simulated-above-negative"});
  monitors.push_back({(HMONITOR)(uintptr_t)0x1003,{3840,-200,5280,2360},false,false,"simulated-portrait"});
  monitors.push_back({(HMONITOR)(uintptr_t)0x1004,{0,0,1366,768},true,false,"simulated-small-laptop"});
+ // common resolutions: the dock scales with the short side of the screen
+ monitors.push_back({(HMONITOR)(uintptr_t)0x1005,{0,0,1280,720},true,false,"simulated-720p"});
+ monitors.push_back({(HMONITOR)(uintptr_t)0x1006,{0,0,1920,1080},true,false,"simulated-1080p"});
+ monitors.push_back({(HMONITOR)(uintptr_t)0x1007,{0,0,2560,1440},true,false,"simulated-1440p"});
+ monitors.push_back({(HMONITOR)(uintptr_t)0x1008,{0,0,3840,2160},true,false,"simulated-4k"});
+ monitors.push_back({(HMONITOR)(uintptr_t)0x1009,{0,0,3440,1440},true,false,"simulated-ultrawide"});
  for(const auto& monitor:monitors)for(int edge=0;edge<4;++edge)for(float size:{36.f,44.f,54.f})for(float mag:{1.f,1.7f,2.1f})for(int count:{12,40}) {
   ++cases;caseFailures=0;
   std::ostringstream label;label<<monitor.name<<" edge="<<edge<<" size="<<size<<" magnification="<<mag<<" apps="<<count;caseLabel=label.str();
@@ -512,6 +521,26 @@ int wmain(int argc,wchar_t** argv) {
   g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.clockSize=clock;g_settings.iconSpacing=spacing;g_settings.showDesktopButton=desktop;g_settings.showOledButton=((edge+clock+spacing)&1)!=0;g_settings.showThemeButton=((edge+spacing)&1)==0;
   g_settings.iconSize=crowded?54.f:36.f;g_settings.magnification=crowded?2.1f:1.7f;
   Apps(crowded?40:12);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);OptionsTests(d);SweepTests(d);DragSpacingTests(d);
+  report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
+ }
+ // Extremes: the largest icon size a settings file accepts, very many apps, every button on or
+ // every optional button off. Fit, button pairing and click targets must still hold everywhere.
+ struct Extreme{const char* name;float size,mag;int apps;bool buttons;int spacing,clock;};
+ const Extreme extremes[]={{"max-icons-crowded",96,2.1f,60,true,2,1},{"ini-magnification-above-menu",96,2.5f,60,true,2,1},{"min-icons-crowded",32,1.7f,80,true,0,0},
+  {"large-icons-few",54,2.1f,5,false,1,1},{"large-icons-all-buttons",54,2.1f,25,true,1,0}};
+ for(const auto& monitor:monitors)for(int edge=0;edge<4;++edge)for(const auto& x:extremes){
+  ++cases;caseFailures=0;
+  std::ostringstream label;label<<"extreme "<<x.name<<" "<<monitor.name<<" edge="<<edge;caseLabel=label.str();
+  g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.iconSize=x.size;g_settings.magnification=x.mag;
+  g_settings.iconSpacing=x.spacing;g_settings.clockSize=x.clock;
+  g_settings.magnification=std::min(g_settings.magnification,2.1f);   // what Settings::Load accepts
+  g_settings.showDesktopButton=g_settings.showThemeButton=g_settings.showOledButton=x.buttons;
+  Apps(x.apps);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);
+  // let the fit settle as it would after a few frames on screen
+  for(int i=0;i<60;++i){d.ApplyFit(1.f/60.f);d.Layout(0);}
+  Check(d.barU0>=-1 && d.barU1<=d.len+1,"extreme settings still fit the monitor edge");
+  StateTests(d);OptionsTests(d);SweepTests(d);
+  if(monitor.actual)ReachabilityTests(d);
   report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
  }
  RenderOptions(actualCount);

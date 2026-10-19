@@ -6,7 +6,15 @@
 #include "window_preview.h"
 
 extern Settings g_settings;
+extern HWND g_mainWnd;
+constexpr UINT WM_APP_REBUILD = WM_APP + 1;
+constexpr UINT WM_APP_AUTOSTART = WM_APP + 2;
 
+// One dock per monitor. The implementation is split by concern:
+//   dock.cpp           window, per-frame state (reveal, magnify, drag, bounce), input messages
+//   dock_layout.cpp    sizes, positions and hit testing
+//   dock_render.cpp    glass and Direct2D drawing
+//   dock_controls.cpp  the small tray buttons, clicks and menus
 class Dock {
 public:
     Dock(HMONITOR mon, int index, bool primary);
@@ -36,47 +44,104 @@ private:
         // layout
         float u = 0, size = 0, u0 = 0, weight = 0;
     };
-    enum HitKind { HitNone, HitSlot, HitTray, HitNet, HitVol, HitClock, HitSensor, HitPanel, HitBar, HitDesktop, HitTheme, HitOled, HitSettings };
+    enum HitKind { HitNone, HitSlot, HitTray, HitNet, HitVol, HitClock, HitSensor, HitPanel, HitBar,
+                   HitDesktop, HitTheme, HitOled, HitSettings, HitKindCount };
     struct Hit { HitKind kind = HitNone; int slot = -1; };
 
+    // ---- small tray buttons (dock_controls.cpp): everything a button needs, in one row of a table.
+    // Two buttons of a group share a cell, split across the bar's thickness, when half the bar is
+    // still a comfortable click target.
+    struct SmallButton {
+        HitKind kind;
+        int group;                         // 0: network + volume, 1: utilities after the sensor cell
+        bool Settings::* shown;            // nullptr: always shown
+        float iconFactor, minWidth;        // cell width = max(icon * factor, minWidth * scale)
+        std::wstring (Dock::* tooltip)() const;
+        void (Dock::* draw)(D2D1_RECT_F r, float u, float vis);
+        void (Dock::* click)();
+    };
+    static const SmallButton kSmallButtons[];
+    static const SmallButton* FindSmallButton(HitKind kind);
+    static bool Shown(const SmallButton& b) { return !b.shown || g_settings.*b.shown; }
+    std::wstring TipNetwork() const;
+    std::wstring TipVolume() const;
+    std::wstring TipDesktop() const;
+    std::wstring TipTheme() const;
+    std::wstring TipOled() const;
+    std::wstring TipSettings() const;
+    void DrawNetwork(D2D1_RECT_F r, float u, float vis);
+    void DrawVolume(D2D1_RECT_F r, float u, float vis);
+    void DrawDesktop(D2D1_RECT_F r, float u, float vis);
+    void DrawTheme(D2D1_RECT_F r, float u, float vis);
+    void DrawOled(D2D1_RECT_F r, float u, float vis);
+    void DrawSettings(D2D1_RECT_F r, float u, float vis);
+    void ClickNetwork();
+    void ClickVolume();
+    void ClickDesktop();
+    void ClickTheme();
+    void ClickOled();
+    void ClickSettings() { ShowDockMenu(); }
+
+    // ---- layout (dock_layout.cpp)
+    struct Cell { float u0 = 0, u1 = 0; int half = -1; float Mid() const { return (u0 + u1) * 0.5f; } };   // half -1: whole cell
+    Cell cells[HitKindCount];              // tray, clock, sensor and the small buttons
+    bool stackButtons = false;
+    struct LayoutMetrics {
+        float icon, padding, gap, thickness;
+        float separator, trayButton, clock, sensor;
+        float connectivity, utilities;     // the two small-button groups, after pairing
+        bool stack;
+        float TrayWidth() const { return separator + trayButton + connectivity + clock + sensor + utilities; }
+    };
+    LayoutMetrics MeasureMetrics(float fitFactor);
+    float SmallButtonWidth(const SmallButton& b, const LayoutMetrics& m) const;
+    float ArrangeGroup(int group, const LayoutMetrics& m, float x, bool assign);   // returns the end
+    D2D1_RECT_F ButtonRect(HitKind kind, bool hit = false) const;
+    float ButtonIconScale() const { return stackButtons ? 0.8f : 1.0f; }
     void Metrics();
-    void SyncSlots();
+    void ApplyFit(float dt);
     void Layout(double now);
-    void UpdateRegion();
     Hit HitTestUV(float u, float v);
     void ScreenToUV(POINT p, float& u, float& v) const;
     void ClientToUV(int x, int y, float& u, float& v) const;
     D2D1_POINT_2F W(float u, float v) const;
     D2D1_RECT_F RectUV(float u0, float u1, float v0, float v1) const;
+    POINT ScreenPointUV(float u, float v) const;
+    RECT  BarScreenRect() const;
+    float TextWidth(IDWriteTextFormat* f, const std::wstring& s);
+    D2D1_SIZE_F TextSize(IDWriteTextFormat* f, const std::wstring& s);
+    IDWriteTextFormat* ClockFont(bool date = false) const;
+    void ComputePanelRect();
+    bool CursorInPanel() const;
+
+    // ---- frame and input (dock.cpp)
+    void SyncSlots();
+    void UpdateRegion();
     void StartBounce(Slot& s, int count, bool loop, bool hiddenMode, double now);
     bool CreateDeviceResources();
-    void DrawIcon(Slot& s, float u, float vBottom, float size, float alpha);
-    void DrawStartIcon(D2D1_RECT_F r, float alpha);
-    void DrawTooltip(const std::wstring& text, float u, float vBase);
+    bool FullscreenAppActive() const;
+    void Click(const Hit& h);
+    void EndDrag(bool commit);
+
+    // ---- menus (dock_controls.cpp)
     void ShowAppMenu(Slot& s);
     void ShowDockMenu();
     void ShowTrayMenu(HitKind kind);
     int  PopupMenu(HMENU m);
-    void Click(const Hit& h);
     void ToggleOled();
-    void DrawOledButton(float v0, float v1, float vis);
-    void DrawThemeButton(float v0, float v1, float vis);
-    void EndDrag(bool commit);
-    float TextWidth(IDWriteTextFormat* f, const std::wstring& s);
-    D2D1_SIZE_F TextSize(IDWriteTextFormat* f, const std::wstring& s);
-    IDWriteTextFormat* ClockFont(bool date = false) const;
-    // Small square buttons (network, volume, desktop, theme, OLED, settings). Two share a cell,
-    // split across the bar's thickness, when half the bar is still a comfortable click target.
-    D2D1_RECT_F ButtonRect(HitKind kind, bool hit = false) const;
-    float ButtonIconScale() const { return stackButtons ? 0.8f : 1.0f; }
-    struct LayoutMetrics {
-        float icon, padding, gap, thickness;
-        float separator, trayButton, network, volume, connectivity, clock, sensor, desktop, themeBtn, oled, settings, utilities;
-        bool stack;
-        float TrayWidth() const { return separator + trayButton + connectivity + clock + sensor + utilities; }
-    };
-    LayoutMetrics MeasureMetrics(float fitFactor);
-    bool FullscreenAppActive() const;
+
+    // ---- drawing (dock_render.cpp)
+    void DrawIcon(Slot& s, float u, float vBottom, float size, float alpha);
+    void DrawStartIcon(D2D1_RECT_F r, float alpha);
+    void DrawTooltip(const std::wstring& text, float u, float vBase);
+    void DrawShadowText(const std::wstring& t, IDWriteTextFormat* f, D2D1_RECT_F r, float u, float alpha);
+    void DrawGlyph(const wchar_t* glyph, D2D1_RECT_F r, float u, float vis);
+    void DrawSensorCell(float v0, float v1, float vis);
+    void DrawSensorPeek();
+    void DrawPanel();
+    float InkAt(float u) const;
+    D2D1_COLOR_F Ink(float u, float alpha) const;
+
     WindowPreview windowPreview;
 
     RECT mon{};          // monitor rect (physical px)
@@ -84,7 +149,6 @@ private:
     float len = 0, T = 0, scale = 1;
     float base = 54, pad = 8, gap = 6, margin = 6, barThick = 70, magRange = 140, mag = 1.7f;
     float baseNominal = 54, fit = 1;   // fit < 1 shrinks the dock when it would overflow the edge
-    void ApplyFit(float dt);
 
     // state
     Spring reveal, magAmount, tooltipAlpha;
@@ -99,33 +163,17 @@ private:
 
     std::vector<Slot> slots;
     Spring trailingGap;
-    // tray layout
-    float trayU0 = 0, trayU1 = 0;
-    POINT ScreenPointUV(float u, float v) const;
-    RECT  BarScreenRect() const;
-    float sepU = 0, netU0 = 0, netU1 = 0, volU0 = 0, volU1 = 0, clkU0 = 0, clkU1 = 0, sensU0 = 0, sensU1 = 0;
-    float desktopU0 = 0, desktopU1 = 0;
-    int netHalf = -1, volHalf = -1, desktopHalf = -1, themeHalf = -1, oledHalf = -1, settingsHalf = -1;   // -1: whole cell
-    bool stackButtons = false;
-    float themeU0 = 0, themeU1 = 0;
-    float oledU0 = 0, oledU1 = 0;
-    float settingsU0 = 0, settingsU1 = 0;
+    float sepU = 0, barU0 = 0, barU1 = 0, trayW = 0;
+    float hideOff = 0;
     // system monitor: cell at the end of the dock + glass popover panel
     Spring panelAlpha;
     double panelOutsideSince = -1;
     float panelW = 0, panelH = 0;          // physical px (screen orientation)
     D2D1_RECT_F panelRect{};               // window coords
     int lastSensorVersion = -1;
-    void ComputePanelRect();
-    bool CursorInPanel() const;
-    void DrawSensorCell(float v0, float v1, float vis);
-    void DrawSensorPeek();
-    void DrawPanel();
     // overheat bounce of the sensor cell
     double sbStart = 0; int sbCount = 0; bool sbHidden = false; float sbOff = 0;
     Spring sbPeek;
-    float barU0 = 0, barU1 = 0, trayW = 0;
-    float hideOff = 0;
 
     // input
     int pressSlot = -1; HitKind pressKind = HitNone;
@@ -153,8 +201,6 @@ private:
     ComPtr<ID3D11Texture2D> lumStage[2];
     int lumFrame = 0;
     float lumCol[16] = {}, inkTarget[16] = {}, inkCol[16] = {};
-    float InkAt(float u) const;
-    D2D1_COLOR_F Ink(float u, float alpha) const;
 
     bool snapshotPending = false;
     void SaveSnapshot();

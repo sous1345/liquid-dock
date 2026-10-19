@@ -49,6 +49,9 @@ int wmain() {
     write(legacy + "clockSize=99\niconSpacing=-5\n");
     Settings bounded; bounded.Load();
     Check(bounded.clockSize == 1 && bounded.iconSpacing == 0, "numeric option values are bounded");
+    write(legacy + "magnification=2.5\n");
+    Settings magnified; magnified.Load();
+    Check(magnified.magnification == 2.1f, "magnification above the menu maximum is clamped");
     write(legacy + "clockSize=1\n");
     Settings partial; partial.Load();
     Check(partial.clockSize == 1 && partial.showDesktopButton && partial.iconSpacing == 1, "partially upgraded files retain defaults for missing keys");
