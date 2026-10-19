@@ -13,20 +13,19 @@
 // testing, hover highlight and tooltip placement are shared; the icon is drawn in buttons.cpp.
 
 const Dock::SmallButton Dock::kSmallButtons[kButtonCount] = {
-    // id                     icon×  min  tooltip               click                  right click
-    { ButtonId::Network,      0.55f, 24,  &Dock::TipNetwork,    &Dock::ClickNetwork,    &Dock::MenuNetwork },
-    { ButtonId::Volume,       0.55f, 24,  &Dock::TipVolume,     &Dock::ClickVolume,     &Dock::MenuVolume },
-    { ButtonId::Desktop,      0.55f, 24,  &Dock::TipDesktop,    &Dock::ClickDesktop,    nullptr },
-    { ButtonId::Theme,        0.55f, 24,  &Dock::TipTheme,      &Dock::ClickTheme,      nullptr },
-    { ButtonId::Oled,         0.55f, 24,  &Dock::TipOled,       &Dock::ClickOled,       nullptr },
-    { ButtonId::Awake,        0.55f, 24,  &Dock::TipAwake,      &Dock::ClickAwake,      nullptr },
-    { ButtonId::Screenshot,   0.55f, 24,  &Dock::TipScreenshot, &Dock::ClickScreenshot, nullptr },
-    { ButtonId::Quiet,        0.55f, 24,  &Dock::TipQuiet,      &Dock::ClickQuiet,      &Dock::MenuQuiet },
-    { ButtonId::Trash,        0.55f, 24,  &Dock::TipTrash,      &Dock::ClickTrash,      &Dock::MenuTrash },
-    { ButtonId::Downloads,    0.55f, 24,  &Dock::TipDownloads,  &Dock::ClickDownloads,  &Dock::MenuDownloads },
-    { ButtonId::Audio,        0.55f, 24,  &Dock::TipAudio,      &Dock::ClickAudio,      &Dock::MenuAudio },
-    // always available, with a generous cell independent of crowded app icons
-    { ButtonId::Settings,     0.65f, 32,  &Dock::TipSettings,   &Dock::ClickSettings,   nullptr },
+    // id                     tooltip               click                  right click
+    { ButtonId::Network,      &Dock::TipNetwork,    &Dock::ClickNetwork,    &Dock::MenuNetwork },
+    { ButtonId::Volume,       &Dock::TipVolume,     &Dock::ClickVolume,     &Dock::MenuVolume },
+    { ButtonId::Desktop,      &Dock::TipDesktop,    &Dock::ClickDesktop,    nullptr },
+    { ButtonId::Theme,        &Dock::TipTheme,      &Dock::ClickTheme,      nullptr },
+    { ButtonId::Oled,         &Dock::TipOled,       &Dock::ClickOled,       nullptr },
+    { ButtonId::Awake,        &Dock::TipAwake,      &Dock::ClickAwake,      nullptr },
+    { ButtonId::Screenshot,   &Dock::TipScreenshot, &Dock::ClickScreenshot, nullptr },
+    { ButtonId::Quiet,        &Dock::TipQuiet,      &Dock::ClickQuiet,      &Dock::MenuQuiet },
+    { ButtonId::Trash,        &Dock::TipTrash,      &Dock::ClickTrash,      &Dock::MenuTrash },
+    { ButtonId::Downloads,    &Dock::TipDownloads,  &Dock::ClickDownloads,  &Dock::MenuDownloads },
+    { ButtonId::Audio,        &Dock::TipAudio,      &Dock::ClickAudio,      &Dock::MenuAudio },
+    { ButtonId::Settings,     &Dock::TipSettings,   &Dock::ClickSettings,   nullptr },
 };
 
 namespace {

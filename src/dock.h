@@ -69,7 +69,6 @@ private:
     // cell, split across the bar's thickness, when half the bar is still a comfortable click target.
     struct SmallButton {
         ButtonId id;
-        float iconFactor, minWidth;        // cell width = max(icon * factor, minWidth * scale)
         std::wstring (Dock::* tooltip)() const;
         void (Dock::* click)();
         void (Dock::* rightClick)();       // nullptr: the dock menu

@@ -20,7 +20,8 @@ static const ButtonInfo kInfo[kButtonCount] = {
     { ButtonId::Trash,      "trash",      L"휴지통",            L"파일을 끌어다 놓으면 휴지통으로, 우클릭으로 비우기", false },
     { ButtonId::Downloads,  "downloads",  L"다운로드",          L"최근 받은 파일 목록",                        false },
     { ButtonId::Audio,      "audio",      L"오디오 장치",       L"스피커와 헤드셋 사이를 바로 바꿉니다",       false },
-    { ButtonId::Settings,   "settings",   L"설정",              L"Liquid Dock 설정",                           true },
+    // always available, with a generous cell independent of crowded app icons
+    { ButtonId::Settings,   "settings",   L"설정",              L"Liquid Dock 설정",                           true, 0.65f, 32 },
 };
 
 const ButtonInfo& Info(ButtonId id) { return kInfo[std::clamp((int)id, 0, kButtonCount - 1)]; }
@@ -71,6 +72,21 @@ void SetButton(ButtonId id, bool on) {
     auto ids = ChosenButtons();
     if (on) ids.push_back(id); else ids.erase(std::find(ids.begin(), ids.end(), id));
     g_settings.trayButtons = FormatButtons(ids);
+}
+
+float PlanButtons(const std::vector<ButtonId>& ids, float icon, float scale, bool stack, float x, std::vector<PlannedCell>* out) {
+    if (out) out->clear();
+    int waiting = -1; float waitingW = 0;
+    for (ButtonId id : ids) {
+        const auto& bi = Info(id);
+        float w = std::max(icon * bi.iconFactor, bi.minWidth * scale);
+        if (!stack) { if (out) out->push_back({ id, x, x + w, -1 }); x += w; continue; }
+        if (waiting < 0) { waitingW = w; if (out) { waiting = (int)out->size(); out->push_back({ id, x, x + w, -1 }); } else waiting = 0; continue; }
+        float cell = std::max(waitingW, w);
+        if (out) { (*out)[waiting].u1 = x + cell; (*out)[waiting].half = 0; out->push_back({ id, x, x + cell, 1 }); }
+        x += cell; waiting = -1;
+    }
+    return waiting >= 0 ? x + waitingW : x;
 }
 
 // ---------------------------------------------------------------- live state

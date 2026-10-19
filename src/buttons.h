@@ -12,6 +12,7 @@ struct ButtonInfo {
     const wchar_t* name;        // in the settings window
     const wchar_t* description;
     bool fixed;                 // always shown, cannot be moved (network, volume, settings)
+    float iconFactor = 0.55f, minWidth = 24;   // cell width = max(icon * factor, minWidth * scale)
 };
 const ButtonInfo& Info(ButtonId id);
 const ButtonInfo* FindButton(const std::string& key);
@@ -23,6 +24,11 @@ std::string FormatButtons(const std::vector<ButtonId>& ids);
 const std::vector<ButtonId>& ChosenButtons();
 bool HasButton(ButtonId id);
 void SetButton(ButtonId id, bool on);   // added at the end / removed
+
+// Places ids from x along the dock: cell width from the catalogue; with stack, two neighbours share a
+// cell (half 0 / 1), an odd one keeps a whole cell. Shared by the dock and the settings preview.
+struct PlannedCell { ButtonId id; float u0, u1; int half; };
+float PlanButtons(const std::vector<ButtonId>& ids, float icon, float scale, bool stack, float x, std::vector<PlannedCell>* out);
 
 // Live state some buttons show (and act on).
 namespace features {

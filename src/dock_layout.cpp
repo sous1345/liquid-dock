@@ -9,8 +9,8 @@ IDWriteTextFormat* Dock::ClockFont(bool date) const {
 }
 
 float Dock::SmallButtonWidth(ButtonId b, const LayoutMetrics& m) const {
-    const auto& sb = Button(b);
-    return std::max(m.icon * sb.iconFactor, sb.minWidth * scale);
+    const auto& bi = Info(b);
+    return std::max(m.icon * bi.iconFactor, bi.minWidth * scale);
 }
 
 std::vector<ButtonId> Dock::Group(int group) {
@@ -20,24 +20,13 @@ std::vector<ButtonId> Dock::Group(int group) {
     return ids;
 }
 
-// Lays out one group of small buttons from x, in order. When stacking, two neighbours share a cell
-// (an odd one keeps a whole cell). Returns the end of the group.
+// Lays out one group of small buttons from x (PlanButtons, shared with the settings preview).
 float Dock::ArrangeGroup(int group, const LayoutMetrics& m, float x, bool assign) {
-    Cell* waiting = nullptr; float waitingW = 0;
-    Cell scratch[2];
-    int n = 0;
-    for (ButtonId id : Group(group)) {
-        Cell& c = assign ? Cell_(id) : scratch[n++ & 1];
-        float w = SmallButtonWidth(id, m);
-        c.half = -1;
-        if (!m.stack) { c.u0 = x; c.u1 = x += w; continue; }
-        if (!waiting) { waiting = &c; waitingW = w; c.u0 = x; c.u1 = x + w; continue; }
-        float cell = std::max(waitingW, w);
-        waiting->u1 = x + cell; waiting->half = 0;
-        c.u0 = x; c.u1 = x + cell; c.half = 1;
-        x += cell; waiting = nullptr;
-    }
-    return waiting ? x + waitingW : x;
+    if (!assign) return PlanButtons(Group(group), m.icon, scale, m.stack, x, nullptr);
+    std::vector<PlannedCell> cells;
+    float end = PlanButtons(Group(group), m.icon, scale, m.stack, x, &cells);
+    for (auto& c : cells) { auto& cell = Cell_(c.id); cell.u0 = c.u0; cell.u1 = c.u1; cell.half = c.half; }
+    return end;
 }
 
 Dock::LayoutMetrics Dock::MeasureMetrics(float fitFactor, int thicknessPct) {
