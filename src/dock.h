@@ -9,7 +9,9 @@ extern Settings g_settings;
 extern HWND g_mainWnd;
 constexpr UINT WM_APP_REBUILD = WM_APP + 1;
 constexpr UINT WM_APP_AUTOSTART = WM_APP + 2;
-constexpr UINT WM_APP_RELAYOUT = WM_APP + 3;   // shape settings changed: lay the docks out again in place
+constexpr UINT WM_APP_RELAYOUT = WM_APP + 3;
+constexpr UINT WM_APP_APPBAR = WM_APP + 40;
+constexpr UINT WM_APP_SETTINGS = WM_APP + 4;    // open the settings window     // shell notifications for an always-shown dock   // shape settings changed: lay the docks out again in place
 
 // One dock per monitor. The implementation is split by concern:
 //   dock.cpp           window, per-frame state (reveal, magnify, drag, bounce), input messages
@@ -83,7 +85,7 @@ private:
     void ClickDesktop();
     void ClickTheme();
     void ClickOled();
-    void ClickSettings() { ShowDockMenu(); }
+    void ClickSettings();
 
     // ---- layout (dock_layout.cpp)
     struct Cell { float u0 = 0, u1 = 0; int half = -1; float Mid() const { return (u0 + u1) * 0.5f; } };   // half -1: whole cell
@@ -120,6 +122,10 @@ private:
     // ---- frame and input (dock.cpp)
     void SyncSlots();
     void UpdateRegion();
+    // Always-shown dock: registered as an app bar so maximised windows stop at it, like the taskbar.
+    bool AlwaysShown() const;
+    void UpdateAppBar(bool want);
+    bool appBar = false; RECT appBarRect{};
     void StartBounce(Slot& s, int count, bool loop, bool hiddenMode, double now);
     bool CreateDeviceResources();
     bool FullscreenAppActive() const;

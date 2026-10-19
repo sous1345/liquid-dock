@@ -39,7 +39,8 @@ Dock::LayoutMetrics Dock::MeasureMetrics(float fitFactor, int thicknessPct) {
     float pct = (thicknessPct > 0 ? thicknessPct : std::clamp(g_settings.dockThickness, 75, 150)) / 100.0f;
     m.icon = std::max(1.0f, std::round(baseNominal * fitFactor * 1.30f * 0.60f));
     float thick = m.icon / 0.60f * pct;
-    m.gap = std::round(m.icon * spacing[std::clamp(g_settings.iconSpacing, 0, 2)]);
+    float gapRatio = g_settings.iconGap > 0 ? std::clamp(g_settings.iconGap, 10, 60) / 100.0f : spacing[std::clamp(g_settings.iconSpacing, 0, 2)];
+    m.gap = std::round(m.icon * gapRatio);
 
     bool vert = IsVertical(g_settings.edge);
     const auto time = TextSize(ClockFont(), vert ? L"88:88" : g_sys.timeText);

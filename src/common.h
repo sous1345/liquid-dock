@@ -68,10 +68,12 @@ struct Settings {
     bool  showOledButton = false;   // OLED burn-in guard toggle in the dock
     bool  oledOneMonitor = false;   // black wallpaper only on the monitor whose dock was clicked
     int   clockSize = 0;        // 0 normal, 1 large; independent of icon size
-    int   iconSpacing = 1;      // 0 compact, 1 normal, 2 wide
+    int   iconSpacing = 1;      // 0 compact, 1 normal, 2 wide (menu presets)
+    int   iconGap = 0;          // gap between icons in % of the icon (settings slider); 0 = use iconSpacing
     int   dockThickness = 100;  // glass thickness in % of the default; icons keep their size
     int   edgeGap = 6;          // px between the screen edge and the glass (at a 1440 px short side)
     int   edgeOffset = 0;       // along the edge: -100 left/top end, 0 centred, 100 right/bottom end
+    bool  autoHide = true;      // false: always shown, with its strip of the screen reserved (not in OLED mode)
     float showDelay = 0.05f;    // seconds at edge before reveal
     float hideDelay = 0.35f;    // seconds outside before hide
     bool  autostart = false;

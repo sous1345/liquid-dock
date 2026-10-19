@@ -59,6 +59,15 @@ int wmain() {
     write(legacy);
     Settings legacyShape; legacyShape.Load();
     Check(legacyShape.dockThickness == 100 && legacyShape.edgeGap == 6 && legacyShape.edgeOffset == 0, "older files get the default shape");
+    write(legacy);
+    Settings hidden; hidden.Load();
+    Check(hidden.autoHide, "older files keep auto-hide on");
+    hidden.autoHide = false; hidden.Save();
+    Settings shown; shown.Load();
+    Check(!shown.autoHide && legacyUnchanged(shown), "auto-hide off survives save and load");
+    write(legacy + "iconGap=99\n");
+    Settings gapped; gapped.Load();
+    Check(gapped.iconGap == 60 && gapped.iconSpacing == 1, "icon gap is bounded and leaves the preset alone");
     write(legacy + "magnification=2.5\n");
     Settings magnified; magnified.Load();
     Check(magnified.magnification == 2.1f, "magnification above the menu maximum is clamped");

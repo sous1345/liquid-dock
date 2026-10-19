@@ -129,6 +129,11 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_APP_REBUILD:
         g_rebuildAt = NowSeconds();
         return 0;
+    case WM_APP_SETTINGS: {   // "LiquidDock.exe --settings" from a shortcut while the dock runs
+        POINT p; GetCursorPos(&p);
+        settingswindow::Show(MonitorFromPoint(p, MONITOR_DEFAULTTOPRIMARY));
+        return 0;
+    }
     case WM_APP_RELAYOUT:   // shape sliders: in place, unless a window has to change size
         for (auto& d : g_docks) if (!d->Relayout()) { g_rebuildAt = NowSeconds(); break; }
         return 0;
@@ -300,6 +305,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
         }
     }
 #endif
+    if (args.find(L"--settings") != std::wstring::npos) {
+        if (HWND other = FindWindowW(L"LiquidDockMain", nullptr)) { AllowSetForegroundWindow(ASFW_ANY); PostMessageW(other, WM_APP_SETTINGS, 0, 0); return 0; }
+        // not running: start normally (the settings open once the docks are up)
+    }
     if (args.find(L"--restore") != std::wstring::npos || args.find(L"--quit") != std::wstring::npos) {
         if (HWND other = FindWindowW(L"LiquidDockMain", nullptr)) {
             // ask nicely; a hung dock is ended and the taskbar restored from here
@@ -364,7 +373,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) { g_running = false; break; }
-            if (shapewindow::PreTranslate(&msg)) continue;
+            if (settingswindow::PreTranslate(&msg)) continue;
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -379,6 +388,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
         if ((g_deviceResetRequested || g_gfx.DeviceLost()) && now >= g_nextDeviceRetry) {
             g_deviceResetRequested = false;
             Log(L"GPU device lost - recreating");
+            settingswindow::Close();   // its swap chain belongs to the old device
             g_docksReady = false;
             g_docks.clear();
             if (g_gfx.Reset()) { g_apps.ReloadIcons(); BuildDocks(); }

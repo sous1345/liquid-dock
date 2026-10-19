@@ -25,6 +25,7 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 Dock::Dock(HMONITOR m, int i, bool p) : monitor(m), index(i), primary(p) {}
 
 Dock::~Dock() {
+    UpdateAppBar(false);
     windowPreview.Dismiss();
     capture.Stop();
     if (hwnd) DestroyWindow(hwnd);
@@ -63,6 +64,45 @@ void Dock::Metrics() {
     case Edge::Right:  winX = mon.right - t; winY = mon.top;   winW = t; winH = mon.bottom - mon.top; break;
     }
     g_gfx.EnsureFonts(scale);
+}
+
+bool Dock::AlwaysShown() const { return !g_settings.autoHide && !oled::Active(); }   // OLED mode always hides
+
+void Dock::UpdateAppBar(bool want) {
+    APPBARDATA abd = { sizeof(abd) };
+    abd.hWnd = hwnd;
+    if (!want || !hwnd) {
+        if (appBar) { SHAppBarMessage(ABM_REMOVE, &abd); appBar = false; appBarRect = {}; }
+        return;
+    }
+    // the strip from the screen edge to the far side of the glass, in steps of 4 px so a crowded
+    // dock shrinking by a pixel does not make every window on the screen move again
+    int band = ((int)std::ceil(margin + barThick) + 3) / 4 * 4;
+    RECT r = mon;
+    UINT e = ABE_BOTTOM;
+    switch (g_settings.edge) {
+    case Edge::Bottom: e = ABE_BOTTOM; r.top = r.bottom - band; break;
+    case Edge::Top:    e = ABE_TOP;    r.bottom = r.top + band; break;
+    case Edge::Left:   e = ABE_LEFT;   r.right = r.left + band; break;
+    case Edge::Right:  e = ABE_RIGHT;  r.left = r.right - band; break;
+    }
+    if (appBar && EqualRect(&r, &appBarRect)) return;
+    if (!appBar) {
+        abd.uCallbackMessage = WM_APP_APPBAR;
+        if (!SHAppBarMessage(ABM_NEW, &abd)) { Log(L"appbar: register failed"); appBarRect = r; return; }
+        appBar = true;
+    }
+    abd.uEdge = e;
+    abd.rc = r;
+    SHAppBarMessage(ABM_QUERYPOS, &abd);
+    switch (e) {   // keep the dock's own thickness from whatever edge the shell returned
+    case ABE_BOTTOM: abd.rc.top = abd.rc.bottom - band; break;
+    case ABE_TOP:    abd.rc.bottom = abd.rc.top + band; break;
+    case ABE_LEFT:   abd.rc.right = abd.rc.left + band; break;
+    case ABE_RIGHT:  abd.rc.left = abd.rc.right - band; break;
+    }
+    SHAppBarMessage(ABM_SETPOS, &abd);
+    appBarRect = r;
 }
 
 bool Dock::Relayout() {
@@ -323,8 +363,18 @@ void Dock::Update(double now, float dt, POINT cursor) {
     bool fullscreen = FullscreenAppActive();
     bool inPreview = windowPreview.Contains(cursor);
     if (debugForceShow || settingsOpen) reveal.target = 1;
+    bool alwaysShown = AlwaysShown();
+    UpdateAppBar(alwaysShown);
 
-    if (reveal.target < 0.5f) {
+    if (alwaysShown) {
+        // auto-hide off: only a fullscreen app (a game, a video) puts the dock away
+        if (fullscreen && !keep) reveal.target = 0;
+        else if (reveal.target < 0.5f) {
+            reveal.target = 1;
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        outsideSince = edgeSince = -1;
+    } else if (reveal.target < 0.5f) {
         if (atEdge) {
             if (edgeSince < 0) edgeSince = now;
             lastCaptureWanted = now;        // pre-warm capture
@@ -699,6 +749,9 @@ LRESULT Dock::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         DragFinish(hd);
         return 0;
     }
+    case WM_APP_APPBAR:   // another app bar or the taskbar moved: claim the strip again
+        if (wp == ABN_POSCHANGED) appBarRect = {};
+        return 0;
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: { PAINTSTRUCT ps; BeginPaint(hwnd, &ps); EndPaint(hwnd, &ps); dirty = true; return 0; }
     }

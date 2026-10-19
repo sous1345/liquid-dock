@@ -161,83 +161,34 @@ void Dock::ShowTrayMenu(HitKind kind) {
     mb.Run(PopupMenu(m));
 }
 
+void Dock::ClickSettings() { settingswindow::Show(monitor); }
+
+// The quick menu: what people switch often. Everything else is in the settings window.
 void Dock::ShowDockMenu() {
     MenuBuilder mb;
     HMENU m = mb.root;
-    enum Effect { None, Rebuild, Reblur };
-    Effect effect = None;
-    // a choice that changes the layout rebuilds every dock; a glass change re-blurs them
-    auto choice = [&](HMENU sub, const wchar_t* label, bool checked, std::function<void()> set, Effect e) {
-        mb.Item(sub, label, [set, e, &effect] { set(); effect = e; }, checked);
-    };
-    auto& s = g_settings;
+    bool rebuild = false;
+    HMONITOR mon = monitor;
+    mb.Item(m, L"설정...", [mon] { settingswindow::Show(mon); });
+    mb.Separator(m);
 
     HMENU pos = mb.Sub();
     const std::pair<Edge, const wchar_t*> edges[] = { { Edge::Bottom, L"아래" }, { Edge::Left, L"왼쪽" }, { Edge::Right, L"오른쪽" }, { Edge::Top, L"위" } };
-    for (auto& [e, label] : edges) choice(pos, label, s.edge == e, [e] { g_settings.edge = e; }, Rebuild);
+    for (auto& [e, label] : edges) mb.Item(pos, label, [e, &rebuild] { g_settings.edge = e; rebuild = true; }, g_settings.edge == e);
+    mb.Popup(m, pos, L"위치");
 
     HMENU size = mb.Sub();
-    choice(size, L"작게", s.iconSize < 40, [] { g_settings.iconSize = 36; }, Rebuild);
-    choice(size, L"보통", s.iconSize >= 40 && s.iconSize < 49, [] { g_settings.iconSize = 44; }, Rebuild);
-    choice(size, L"크게", s.iconSize >= 49, [] { g_settings.iconSize = 54; }, Rebuild);
-
-    HMENU spacing = mb.Sub();
-    const wchar_t* spacingLabels[] = { L"좁게", L"보통", L"넓게" };
-    for (int i = 0; i < 3; ++i) choice(spacing, spacingLabels[i], s.iconSpacing == i, [i] { g_settings.iconSpacing = i; }, Rebuild);
-
-    HMENU clock = mb.Sub();
-    choice(clock, L"보통", s.clockSize == 0, [] { g_settings.clockSize = 0; }, Rebuild);
-    choice(clock, L"크게", s.clockSize == 1, [] { g_settings.clockSize = 1; }, Rebuild);
-
-    HMENU om = mb.Sub();
-    mb.Item(om, L"OLED 모드 켜기 (검은 배경 · 아이콘 숨김)", [this] { ToggleOled(); }, oled::Active());
-    mb.Separator(om);
-    choice(om, L"모든 모니터", !s.oledOneMonitor, [] { g_settings.oledOneMonitor = false; }, None);
-    choice(om, L"이 모니터만", s.oledOneMonitor, [] { g_settings.oledOneMonitor = true; }, None);
-    mb.Separator(om);
-    choice(om, L"독에 OLED 버튼 표시", s.showOledButton, [] { g_settings.showOledButton = !g_settings.showOledButton; }, Rebuild);
-
-    HMENU mg = mb.Sub();
-    choice(mg, L"끄기", s.magnification < 1.05f, [] { g_settings.magnification = 1.0f; }, Rebuild);
-    choice(mg, L"약하게", s.magnification >= 1.05f && s.magnification < 1.55f, [] { g_settings.magnification = 1.4f; }, Rebuild);
-    choice(mg, L"보통", s.magnification >= 1.55f && s.magnification < 1.9f, [] { g_settings.magnification = 1.7f; }, Rebuild);
-    choice(mg, L"강하게", s.magnification >= 1.9f, [] { g_settings.magnification = 2.1f; }, Rebuild);
-
-    HMENU gl = mb.Sub();
-    const wchar_t* glassLabels[] = { L"맑게", L"보통", L"뿌옇게" };
-    for (int i = 0; i < 3; ++i) choice(gl, glassLabels[i], s.glassStyle == i, [i] { g_settings.glassStyle = i; }, Reblur);
-
-    HMENU dl = mb.Sub();
-    choice(dl, L"즉시", s.showDelay < 0.1f, [] { g_settings.showDelay = 0.0f; }, None);
-    choice(dl, L"짧게", s.showDelay >= 0.1f && s.showDelay < 0.3f, [] { g_settings.showDelay = 0.15f; }, None);
-    choice(dl, L"길게", s.showDelay >= 0.3f, [] { g_settings.showDelay = 0.45f; }, None);
-
-    HMONITOR mon = monitor;
-    mb.Item(m, L"독 크기와 위치 조절...", [mon] { shapewindow::Show(mon); });
-    mb.Separator(m);
-    mb.Popup(m, pos, L"위치");
+    const std::pair<float, const wchar_t*> sizes[] = { { 36.f, L"작게" }, { 44.f, L"보통" }, { 54.f, L"크게" } };
+    for (auto& [v, label] : sizes)
+        mb.Item(size, label, [v, &rebuild] { g_settings.iconSize = v; rebuild = true; }, std::fabs(g_settings.iconSize - v) < 1);
     mb.Popup(m, size, L"아이콘 크기");
-    mb.Popup(m, spacing, L"아이콘 간격");
-    mb.Popup(m, clock, L"시계 글자 크기");
-    choice(m, L"바탕화면 보기 버튼", s.showDesktopButton, [] { g_settings.showDesktopButton = !g_settings.showDesktopButton; }, Rebuild);
-    choice(m, L"다크/라이트 전환 버튼", s.showThemeButton, [] { g_settings.showThemeButton = !g_settings.showThemeButton; }, Rebuild);
-    mb.Popup(m, om, L"OLED 모드", oled::Active());
-    mb.Popup(m, mg, L"확대 효과");
-    mb.Popup(m, gl, L"유리 질감");
-    mb.Popup(m, dl, L"나타나는 속도");
-    mb.Separator(m);
-    mb.Item(m, L"Windows 시작 시 자동 실행", [] {
-        g_settings.autostart = !g_settings.autostart; PostMessageW(g_mainWnd, WM_APP_AUTOSTART, 0, 0);
-    }, s.autostart);
-    mb.Item(m, L"CPU 온도 표시 (관리자 도우미 + PawnIO)", [this] {
-        if (g_settings.cpuTemp) g_settings.cpuTemp = false;   // the helper's readings are ignored from now on
-        else { SetForegroundWindow(hwnd); g_sensors.EnableCpuTemp(hwnd); }
-    }, s.cpuTemp);
+
+    mb.Item(m, L"자동 숨김", [] { g_settings.autoHide = !g_settings.autoHide; }, g_settings.autoHide);
+    mb.Item(m, L"OLED 모드", [this] { ToggleOled(); }, oled::Active());
     mb.Separator(m);
     mb.Item(m, L"Liquid Dock 종료 (기본 작업표시줄 복원)", [] { PostMessageW(g_mainWnd, WM_CLOSE, 0, 0); });
 
     if (!mb.Run(PopupMenu(m))) return;
     g_settings.Save();
-    if (effect == Reblur) { backdropDirty = true; dirty = true; PostMessageW(g_mainWnd, WM_APP_REBUILD, 1, 0); }   // other docks redo their blur too
-    if (effect == Rebuild) PostMessageW(g_mainWnd, WM_APP_REBUILD, 0, 0);
+    if (rebuild) PostMessageW(g_mainWnd, WM_APP_REBUILD, 0, 0);
 }

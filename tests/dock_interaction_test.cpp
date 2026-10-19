@@ -60,7 +60,8 @@ void Reapply(){}
 }
 // the shape window never opens in the matrix
 #include "../src/settings_window.h"
-namespace shapewindow { void Show(HMONITOR){} bool IsOpen(){return false;} bool PreTranslate(MSG*){return false;} }
+static int settingsWindows=0;
+namespace settingswindow { void Show(HMONITOR){++settingsWindows;} void Close(){} bool IsOpen(){return false;} bool PreTranslate(MSG*){return false;} }
 static int themeActions=0; static bool themeLight=false;
 namespace theme {
 bool IsLight(){return themeLight;}
@@ -347,9 +348,9 @@ static void OptionsTests(Dock& d) {
  Advance(d,settingsPoint,0.8);
  Check(d.hoverKind==Dock::HitSettings && d.reveal.target==1,"gear remains reachable after leaving magnified apps");
  Check(d.panelAlpha.target==0,"settings hover does not open the sensor panel");
- int menuBefore=settingsMenus,desktopBefore=desktopActions;
+ int windowsBefore=settingsWindows,menuBefore=settingsMenus,desktopBefore=desktopActions;
  d.Click({Dock::HitSettings,-1}); // popup display is intercepted; no real menu or focus changes
- Check(settingsMenus==menuBefore+1 && desktopActions==desktopBefore,"gear click opens the existing settings menu, not the desktop action");
+ Check(settingsWindows==windowsBefore+1 && settingsMenus==menuBefore && desktopActions==desktopBefore,"gear click opens the settings window, not a menu or the desktop action");
  for(auto kind:{Dock::HitNet,Dock::HitVol}){
   auto r=d.ButtonRect(kind);
   POINT p={d.winX+(LONG)((r.left+r.right)*0.5f),d.winY+(LONG)((r.top+r.bottom)*0.5f)};
@@ -574,6 +575,36 @@ int wmain(int argc,wchar_t** argv) {
   Check(d.margin+d.barThick<=d.T,"glass stays inside the window after a live change");
   StateTests(d);OptionsTests(d);SweepTests(d);
   if(monitor.actual)ReachabilityTests(d);
+  report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
+ }
+ // Auto-hide off: shown without the pointer, put away only by a fullscreen app, and OLED mode
+ // still hides it. (The fixture docks have no window, so no real app bar is registered.)
+ for(const auto& monitor:monitors)for(int edge=0;edge<4;++edge)for(bool crowded:{false,true}){
+  ++cases;caseFailures=0;
+  std::ostringstream label;label<<"always-shown "<<monitor.name<<" edge="<<edge<<" crowded="<<crowded;caseLabel=label.str();
+  g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.autoHide=false;
+  if(crowded){g_settings.iconSize=54;g_settings.magnification=2.1f;}
+  Apps(crowded?40:12);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);
+  Advance(d,Outside(d.mon),1.0);
+  Check(d.reveal.target==1 && d.reveal.x>0.95f,"auto-hide off: the dock is shown with the pointer elsewhere");
+  Check(!IsRectEmpty(&d.curRegion),"auto-hide off: the shown dock takes input");
+  fgEnabled=true;fgMonitor=monitor.handle;fgRect=d.mon;fgStyle=WS_POPUP;fgMaximized=false;
+  Advance(d,Outside(d.mon),1.0);
+  Check(d.reveal.target==0,"auto-hide off: a fullscreen app puts the dock away");
+  fgEnabled=false;Advance(d,Outside(d.mon),1.0);
+  Check(d.reveal.target==1,"auto-hide off: the dock returns when the fullscreen app is gone");
+  oledOn=true;Advance(d,Outside(d.mon),1.5);
+  Check(d.reveal.target==0,"OLED mode hides the dock even with auto-hide off");
+  oledOn=false;Advance(d,Outside(d.mon),1.0);
+  Check(d.reveal.target==1,"leaving OLED mode shows the always-shown dock again");
+  // every icon and button still works while it stays out
+  for(size_t i=1;i<d.slots.size();i+=std::max<size_t>(1,d.slots.size()/6)){
+   auto p=d.ScreenPointUV(d.slots[i].u,d.margin+d.barThick/2);Advance(d,p,0.4);
+   float u,v;d.ScreenToUV(p,u,v);auto hit=d.HitTestUV(u,v);
+   Check(hit.kind==Dock::HitSlot,"auto-hide off: icons stay reachable");
+  }
+  Advance(d,Outside(d.mon),1.0);
+  Check(d.reveal.target==1,"auto-hide off: leaving the dock does not hide it");
   report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
  }
  RenderOptions(actualCount);

@@ -1,10 +1,12 @@
 #pragma once
 #include "common.h"
 
-// "Dock shape" window: position, icon size, glass thickness, distance from the edge and the
-// position along the edge, with sliders that change the docks live. One instance at a time.
-namespace shapewindow {
+// The settings window: every option on four tabs (shape, behaviour, buttons, system), drawn with
+// Direct2D over the Windows 11 acrylic backdrop (the taskbar's translucent look; a solid colour on
+// Windows 10). Changes reach the docks while sliders move. One instance at a time.
+namespace settingswindow {
     void Show(HMONITOR monitor);
+    void Close();                  // e.g. before a GPU reset: its swap chain belongs to the old device
     bool IsOpen();
-    bool PreTranslate(MSG* msg);   // Tab / Esc / Enter for the window, from the main loop
+    bool PreTranslate(MSG* msg);   // Esc, from the main loop
 }
