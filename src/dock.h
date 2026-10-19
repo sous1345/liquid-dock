@@ -9,6 +9,7 @@ extern Settings g_settings;
 extern HWND g_mainWnd;
 constexpr UINT WM_APP_REBUILD = WM_APP + 1;
 constexpr UINT WM_APP_AUTOSTART = WM_APP + 2;
+constexpr UINT WM_APP_RELAYOUT = WM_APP + 3;   // shape settings changed: lay the docks out again in place
 
 // One dock per monitor. The implementation is split by concern:
 //   dock.cpp           window, per-frame state (reveal, magnify, drag, bounce), input messages
@@ -26,6 +27,8 @@ public:
     void RequestSnapshot() { snapshotPending = true; dirty = true; }
     static inline bool debugForceShow = false;
     static inline bool debugForcePanel = false;
+    static inline bool settingsOpen = false;   // the shape settings window keeps every dock shown
+    bool Relayout();                           // false: the window must be recreated instead
     HWND hwnd = nullptr;
     HMONITOR monitor;
     int index;
@@ -93,7 +96,7 @@ private:
         bool stack;
         float TrayWidth() const { return separator + trayButton + connectivity + clock + sensor + utilities; }
     };
-    LayoutMetrics MeasureMetrics(float fitFactor);
+    LayoutMetrics MeasureMetrics(float fitFactor, int thicknessPct = -1);
     float SmallButtonWidth(const SmallButton& b, const LayoutMetrics& m) const;
     float ArrangeGroup(int group, const LayoutMetrics& m, float x, bool assign);   // returns the end
     D2D1_RECT_F ButtonRect(HitKind kind, bool hit = false) const;
@@ -165,6 +168,7 @@ private:
     Spring trailingGap;
     float sepU = 0, barU0 = 0, barU1 = 0, trayW = 0;
     float hideOff = 0;
+    float edgeReserve = 0;                 // room kept free for magnification next to an offset dock
     // system monitor: cell at the end of the dock + glass popover panel
     Spring panelAlpha;
     double panelOutsideSince = -1;

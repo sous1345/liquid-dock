@@ -10,6 +10,7 @@
 #include <shellapi.h>
 #include <thread>
 #include "oled.h"
+#include "settings_window.h"
 
 Settings g_settings;
 HWND g_mainWnd = nullptr;
@@ -127,6 +128,9 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     case WM_APP_REBUILD:
         g_rebuildAt = NowSeconds();
+        return 0;
+    case WM_APP_RELAYOUT:   // shape sliders: in place, unless a window has to change size
+        for (auto& d : g_docks) if (!d->Relayout()) { g_rebuildAt = NowSeconds(); break; }
         return 0;
     case WM_APP + 30:   // from the enforcer thread: a new taskbar needs its buttons cached here first
         g_taskbar.Enforce(true);
@@ -360,6 +364,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) { g_running = false; break; }
+            if (shapewindow::PreTranslate(&msg)) continue;
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

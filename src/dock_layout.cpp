@@ -32,11 +32,13 @@ float Dock::ArrangeGroup(int group, const LayoutMetrics& m, float x, bool assign
     return waiting ? x + waitingW : x;
 }
 
-Dock::LayoutMetrics Dock::MeasureMetrics(float fitFactor) {
+Dock::LayoutMetrics Dock::MeasureMetrics(float fitFactor, int thicknessPct) {
     LayoutMetrics m{};
     constexpr float spacing[] = { 0.22f, 0.32f, 0.44f };
-    float thick = baseNominal * fitFactor * 1.30f;
-    m.icon = std::max(1.0f, std::round(thick * 0.60f));
+    // icons are 60% of the default glass thickness; the thickness setting only changes the padding
+    float pct = (thicknessPct > 0 ? thicknessPct : std::clamp(g_settings.dockThickness, 75, 150)) / 100.0f;
+    m.icon = std::max(1.0f, std::round(baseNominal * fitFactor * 1.30f * 0.60f));
+    float thick = m.icon / 0.60f * pct;
     m.gap = std::round(m.icon * spacing[std::clamp(g_settings.iconSpacing, 0, 2)]);
 
     bool vert = IsVertical(g_settings.edge);
@@ -112,7 +114,15 @@ void Dock::Layout(double) {
     }
     x += trailingGap.x * unit;
     float total0 = x + trayW + pad;
-    float start0 = std::round(len * 0.5f - total0 * 0.5f);
+    // edgeOffset slides the dock along the edge (-100 / 100: against either end). The shift is
+    // fixed from the resting length minus the room magnification can take (as reserved by
+    // ApplyFit), so the dock still grows evenly to both sides and never runs into the screen end.
+    float weights = 0;
+    for (auto& s : slots) weights += s.weight;
+    edgeReserve = mag > 1.001f ? base * (mag - 1) * std::min(weights, 1 + base * 2.9f / (base + gap)) : 0;
+    float off = std::clamp(g_settings.edgeOffset, -100, 100) / 100.0f;
+    float shift = std::max(0.0f, len - total0 - edgeReserve - 8 * scale) * 0.5f * off;
+    float start0 = std::round(len * 0.5f - total0 * 0.5f + shift);
 
     // Keep the expansion budget independent of cursor position so that the dock
     // stays centered and its ends do not slide while the pointer moves along it.
@@ -150,7 +160,7 @@ void Dock::Layout(double) {
     xm += trailingGap.x * unit;
     total = xm + trayW + pad;
 
-    float start = (len - total) * 0.5f;
+    float start = (len - total) * 0.5f + shift;
     if (total < len - 8 * scale) start = clampf(start, 4 * scale, len - 4 * scale - total);
 
     x = start + pad;

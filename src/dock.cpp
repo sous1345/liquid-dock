@@ -40,7 +40,7 @@ void Dock::Metrics() {
     // floor: on small laptop screens (768 px) pure proportion would make text unreadable
     scale = std::max(0.72f, shortSide / 1440.0f);
     baseNominal = std::round(g_settings.iconSize * scale);
-    margin = std::round(6 * scale);
+    margin = std::round(std::clamp(g_settings.edgeGap, 0, 40) * scale);
     mag = std::max(1.0f, g_settings.magnification);
     g_gfx.EnsureFonts(scale);
     fit = 1;
@@ -50,8 +50,11 @@ void Dock::Metrics() {
     float headroom = std::max(base * (mag - 1), base * 0.65f) + (vert ? 240 * scale : 46 * scale);
     panelW = std::round(300 * scale);
     panelH = std::round(292 * scale);
-    float panelNeed = margin + barThick + 14 * scale + (vert ? panelW : panelH) + 28 * scale;
-    T = std::ceil(std::max(margin + barThick + headroom + 10 * scale, panelNeed));
+    // The window is sized for the largest edge gap and thickness, so those settings can change live
+    // (Relayout) without recreating the window, its swap chain and the screen capture.
+    float marginMax = std::round(40 * scale), thickMax = MeasureMetrics(1, 150).thickness;
+    float panelNeed = marginMax + thickMax + 14 * scale + (vert ? panelW : panelH) + 28 * scale;
+    T = std::ceil(std::max(marginMax + thickMax + headroom + 10 * scale, panelNeed));
     int t = (int)T;
     switch (g_settings.edge) {
     case Edge::Bottom: winX = mon.left; winY = mon.bottom - t; winW = mon.right - mon.left; winH = t; break;
@@ -60,6 +63,16 @@ void Dock::Metrics() {
     case Edge::Right:  winX = mon.right - t; winY = mon.top;   winW = t; winH = mon.bottom - mon.top; break;
     }
     g_gfx.EnsureFonts(scale);
+}
+
+bool Dock::Relayout() {
+    int x = winX, y = winY, w = winW, h = winH;
+    float keepFit = fit;   // a crowded dock keeps its current shrink instead of animating it again
+    Metrics();
+    if (x != winX || y != winY || w != winW || h != winH) return false;
+    fit = keepFit; ApplyFit(0);
+    backdropDirty = dirty = true;
+    return true;
 }
 
 bool Dock::Create() {
@@ -84,7 +97,7 @@ bool Dock::Create() {
     if (!CreateDeviceResources()) return false;
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 
-    reveal.snap(0);
+    reveal.snap(settingsOpen ? 1.0f : 0.0f);   // recreated while the shape settings are open: no pop-in
     magAmount.snap(0);
     trailingGap.snap(0);
     SyncSlots();
@@ -306,10 +319,10 @@ void Dock::Update(double now, float dt, POINT cursor) {
          CursorInPanel() ||
          (panelAlpha.target > 0.5f && cursorU >= cells[HitSensor].u0 - 4 * scale && cursorU <= cells[HitSensor].u1 + 4 * scale &&
           cursorV <= margin + barThick + 16 * scale));   // bridge between cell and panel
-    bool keep = menuOpen || dragging || pressSlot >= 0 || debugForceShow;
+    bool keep = menuOpen || dragging || pressSlot >= 0 || debugForceShow || settingsOpen;
     bool fullscreen = FullscreenAppActive();
     bool inPreview = windowPreview.Contains(cursor);
-    if (debugForceShow) reveal.target = 1;
+    if (debugForceShow || settingsOpen) reveal.target = 1;
 
     if (reveal.target < 0.5f) {
         if (atEdge) {

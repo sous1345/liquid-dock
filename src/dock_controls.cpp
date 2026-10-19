@@ -5,6 +5,7 @@
 #include "oled.h"
 #include "theme.h"
 #include <shellapi.h>
+#include "settings_window.h"
 
 // ---------------------------------------------------------------- small tray buttons
 // A new button is one row here plus its tooltip / draw / click functions; layout, pairing,
@@ -211,6 +212,9 @@ void Dock::ShowDockMenu() {
     choice(dl, L"짧게", s.showDelay >= 0.1f && s.showDelay < 0.3f, [] { g_settings.showDelay = 0.15f; }, None);
     choice(dl, L"길게", s.showDelay >= 0.3f, [] { g_settings.showDelay = 0.45f; }, None);
 
+    HMONITOR mon = monitor;
+    mb.Item(m, L"독 크기와 위치 조절...", [mon] { shapewindow::Show(mon); });
+    mb.Separator(m);
     mb.Popup(m, pos, L"위치");
     mb.Popup(m, size, L"아이콘 크기");
     mb.Popup(m, spacing, L"아이콘 간격");

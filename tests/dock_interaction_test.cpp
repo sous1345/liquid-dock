@@ -58,6 +58,9 @@ bool Enable(HMONITOR){++oledActions;oledOn=true;return true;}
 bool Disable(){++oledActions;oledOn=false;return true;}
 void Reapply(){}
 }
+// the shape window never opens in the matrix
+#include "../src/settings_window.h"
+namespace shapewindow { void Show(HMONITOR){} bool IsOpen(){return false;} bool PreTranslate(MSG*){return false;} }
 static int themeActions=0; static bool themeLight=false;
 namespace theme {
 bool IsLight(){return themeLight;}
@@ -159,7 +162,8 @@ static void AssertHitGeometry(Dock& d) {
  for(auto& b:btns){
   if(!b.on){Check(b.u0==b.u1,"hidden button reserves no space");continue;}
   auto r=d.ButtonRect(b.kind);
-  Check(r.left>=0 && r.top>=0 && r.right<=d.winW && r.bottom<=d.winH,"small buttons stay inside dock window");
+  // half a pixel of slack: at gap 0 the glass is flush with the screen edge
+  Check(r.left>=-0.5f && r.top>=-0.5f && r.right<=d.winW+0.5f && r.bottom<=d.winH+0.5f,"small buttons stay inside dock window");
   Check(std::min(r.right-r.left,r.bottom-r.top)>=22*d.scale-1,"small buttons keep a comfortable click size");
   Check(b.kind==Dock::HitNet||b.kind==Dock::HitVol||b.u0>=d.cells[Dock::HitSensor].u1,"utility buttons follow the sensor cell");
   for(auto& o:seen){
@@ -261,6 +265,8 @@ static void StateTests(Dock& d) {
 static void SweepTests(Dock& d) {
  const POINT center=EdgePoint(d.mon,g_settings.edge,0.5f,0);
  ResetHidden(d);Advance(d,center,1.5);
+ // reference with the pointer over the dock itself (an offset dock is not under the screen centre)
+ Advance(d,d.ScreenPointUV((d.barU0+d.barU1)*0.5f,d.margin+d.barThick/2),1.0);
  const float from=d.slots.front().u,to=d.slots.back().u;
  const float referenceCenter=(d.barU0+d.barU1)*0.5f;
  const float referenceLength=d.barU1-d.barU0;
@@ -539,6 +545,33 @@ int wmain(int argc,wchar_t** argv) {
   // let the fit settle as it would after a few frames on screen
   for(int i=0;i<60;++i){d.ApplyFit(1.f/60.f);d.Layout(0);}
   Check(d.barU0>=-1 && d.barU1<=d.len+1,"extreme settings still fit the monitor edge");
+  StateTests(d);OptionsTests(d);SweepTests(d);
+  if(monitor.actual)ReachabilityTests(d);
+  report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
+ }
+ // Shape settings: glass thickness, distance from the edge, position along the edge.
+ struct Shape{int thick,gap,offset;};
+ const Shape shapes[]={{75,0,-100},{150,40,100},{120,20,-50},{100,6,0},{150,0,100},{75,40,-100}};
+ for(const auto& monitor:monitors)for(int edge=0;edge<4;++edge)for(const auto& sh:shapes){
+  ++cases;caseFailures=0;
+  std::ostringstream label;label<<"shape thick="<<sh.thick<<" gap="<<sh.gap<<" offset="<<sh.offset<<" "<<monitor.name<<" edge="<<edge;caseLabel=label.str();
+  g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.dockThickness=sh.thick;g_settings.edgeGap=sh.gap;g_settings.edgeOffset=sh.offset;
+  g_settings.showOledButton=true;
+  Apps(20);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);
+  Check(std::fabs(d.margin-std::round(sh.gap*d.scale))<0.5f,"edge gap setting sets the glass distance from the edge");
+  Check(d.margin+d.barThick<=d.T,"glass stays inside the dock window at any thickness and gap");
+  Check(d.barU0>=-1 && d.barU1<=d.len+1,"shape settings keep the dock on the monitor");
+  if(sh.offset==-100)Check(d.barU0<=8*d.scale+d.edgeReserve*0.5f+2,"offset -100 puts the dock against the start of the edge (leaving room to magnify)");
+  if(sh.offset==100)Check(d.barU1>=d.len-8*d.scale-d.edgeReserve*0.5f-2,"offset 100 puts the dock against the end of the edge (leaving room to magnify)");
+  if(sh.offset==0)Check(std::fabs((d.barU0+d.barU1)*0.5f-d.len*0.5f)<2,"offset 0 keeps the dock centred");
+  // live change through Relayout: the window keeps its size, the layout follows the new values
+  float before=d.barThick;int wx=d.winX,wy=d.winY,ww=d.winW,wh=d.winH;
+  g_settings.dockThickness=sh.thick==150?75:150;g_settings.edgeGap=40-sh.gap;g_settings.edgeOffset=-sh.offset;
+  Check(d.Relayout(),"thickness, gap and offset change without recreating the window");
+  Check(d.winX==wx&&d.winY==wy&&d.winW==ww&&d.winH==wh,"relayout keeps the window rectangle");
+  d.Layout(0);
+  Check((g_settings.dockThickness>sh.thick)==(d.barThick>before),"thicker setting gives a thicker glass");
+  Check(d.margin+d.barThick<=d.T,"glass stays inside the window after a live change");
   StateTests(d);OptionsTests(d);SweepTests(d);
   if(monitor.actual)ReachabilityTests(d);
   report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";

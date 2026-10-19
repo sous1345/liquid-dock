@@ -49,6 +49,16 @@ int wmain() {
     write(legacy + "clockSize=99\niconSpacing=-5\n");
     Settings bounded; bounded.Load();
     Check(bounded.clockSize == 1 && bounded.iconSpacing == 0, "numeric option values are bounded");
+    write(legacy + "dockThickness=999\nedgeGap=-3\nedgeOffset=-250\n");
+    Settings shaped; shaped.Load();
+    Check(shaped.dockThickness == 150 && shaped.edgeGap == 0 && shaped.edgeOffset == -100, "shape values are bounded");
+    Settings fresh; fresh.Load();
+    shaped.dockThickness = 120; shaped.edgeGap = 18; shaped.edgeOffset = 35; shaped.Save();
+    Settings reread; reread.Load();
+    Check(reread.dockThickness == 120 && reread.edgeGap == 18 && reread.edgeOffset == 35 && legacyUnchanged(reread), "shape values survive save and load");
+    write(legacy);
+    Settings legacyShape; legacyShape.Load();
+    Check(legacyShape.dockThickness == 100 && legacyShape.edgeGap == 6 && legacyShape.edgeOffset == 0, "older files get the default shape");
     write(legacy + "magnification=2.5\n");
     Settings magnified; magnified.Load();
     Check(magnified.magnification == 2.1f, "magnification above the menu maximum is clamped");
