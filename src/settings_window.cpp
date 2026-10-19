@@ -43,6 +43,10 @@ struct Control {
     std::function<void(bool)> toggle;
     // button
     std::function<void()> press;
+    // the value "기본값으로" restores (slider value, segment index, toggle 0/1), shown on the control;
+    // filled in by BuildPages. NAN: none (toggles that act now rather than store a setting)
+    float def = NAN;
+    bool hasDefault = true;
 };
 
 struct Page { const wchar_t* title; const wchar_t* glyph; std::vector<Control> controls; std::function<void()> reset; };
@@ -66,14 +70,14 @@ void BuildPages() {
           [](int i) { g_settings.edge = (Edge)i; } },
         { Control::Slider, L"아이콘 크기", nullptr, Apply::OnRelease, {}, {}, {}, 32, 64, 2,
           [] { return g_settings.iconSize; }, [](float v) { g_settings.iconSize = v; },
-          [](float v) { return Num(v, 0, v == 44 ? L" (기본)" : L""); } },
+          [](float v) { return Num(v, 0, L""); } },
         { Control::Slider, L"아이콘 간격", nullptr, Apply::Live, {}, {}, {}, 10, 60, 2,
           [] { constexpr int preset[] = { 22, 32, 44 }; return (float)(g_settings.iconGap > 0 ? g_settings.iconGap : preset[std::clamp(g_settings.iconSpacing, 0, 2)]); },
           [](float v) { g_settings.iconGap = (int)v; },
-          [](float v) { return Num(v, 0, v == 32 ? L"% (기본)" : L"%"); } },
+          [](float v) { return Num(v, 0, L"%"); } },
         { Control::Slider, L"독 두께", L"아이콘 크기는 그대로 두고 유리 두께만 바뀝니다", Apply::Live, {}, {}, {}, 75, 150, 5,
           [] { return (float)g_settings.dockThickness; }, [](float v) { g_settings.dockThickness = (int)v; },
-          [](float v) { return Num(v, 0, v == 100 ? L"% (기본)" : L"%"); } },
+          [](float v) { return Num(v, 0, L"%"); } },
         { Control::Slider, L"화면 가장자리와 거리", nullptr, Apply::Live, {}, {}, {}, 0, 40, 2,
           [] { return (float)g_settings.edgeGap; }, [](float v) { g_settings.edgeGap = (int)v; },
           [](float v) { return v == 0 ? std::wstring(L"붙임") : Num(v, 0, L" px"); } },
@@ -99,6 +103,8 @@ void BuildPages() {
     behaviour.controls = {
         { Control::Toggle, L"자동 숨김", L"끄면 독이 항상 보이고 창이 독을 가리지 않습니다 (OLED 모드에서는 항상 숨김)", Apply::Live, {}, {}, {}, 0, 1, 1, {}, {}, {},
           [] { return g_settings.autoHide; }, [](bool v) { g_settings.autoHide = v; } },
+        { Control::Toggle, L"시작 메뉴와 함께 표시", L"Windows 키로 시작 메뉴, 검색, 빠른 설정, 알림을 열면 숨어 있던 독도 같이 나옵니다", Apply::Live, {}, {}, {}, 0, 1, 1, {}, {}, {},
+          [] { return g_settings.showWithStart; }, [](bool v) { g_settings.showWithStart = v; } },
         { Control::Slider, L"확대 효과", L"아이콘에 마우스를 올렸을 때 커지는 정도", Apply::OnRelease, {}, {}, {}, 1.0f, 2.1f, 0.1f,
           [] { return g_settings.magnification; }, [](float v) { g_settings.magnification = v; },
           [](float v) { return v < 1.05f ? std::wstring(L"끄기") : Num(v, 1, L"배"); } },
@@ -109,7 +115,7 @@ void BuildPages() {
           [] { return g_settings.hideDelay; }, [](float v) { g_settings.hideDelay = v; },
           [](float v) { return Num(v, 2, L"초"); } },
     };
-    behaviour.reset = [] { Settings d; g_settings.autoHide = d.autoHide; g_settings.magnification = d.magnification; g_settings.showDelay = d.showDelay; g_settings.hideDelay = d.hideDelay; };
+    behaviour.reset = [] { Settings d; g_settings.autoHide = d.autoHide; g_settings.showWithStart = d.showWithStart; g_settings.magnification = d.magnification; g_settings.showDelay = d.showDelay; g_settings.hideDelay = d.hideDelay; };
 
     Page buttons{ L"버튼", L"" };
     buttons.controls.clear();
@@ -119,8 +125,10 @@ void BuildPages() {
     buttons.controls.push_back({ Control::Toggle, L"OLED 모드 켜기", L"지금 바로 검은 배경으로 바꿉니다", Apply::None, {}, {}, {}, 0, 1, 1, {}, {}, {},
         [] { return oled::Active(); },
         [](bool v) { if (v) oled::Enable(g_settings.oledOneMonitor ? g_monitor : nullptr); else oled::Disable(); } });
+    buttons.controls.back().hasDefault = false;   // an action, not a stored setting
     buttons.controls.push_back({ Control::Toggle, L"Windows 다크 모드", nullptr, Apply::None, {}, {}, {}, 0, 1, 1, {}, {}, {},
         [] { return !theme::IsLight(); }, [](bool v) { if (v == theme::IsLight()) theme::Toggle(); } });
+    buttons.controls.back().hasDefault = false;
     buttons.reset = [] { Settings d; g_settings.trayButtons = d.trayButtons; g_settings.oledOneMonitor = d.oledOneMonitor; };
 
     Page system{ L"시스템", L"" };
@@ -143,6 +151,18 @@ void BuildPages() {
           [] { PostMessageW(g_mainWnd, WM_CLOSE, 0, 0); } },
     };
     g_pages = { shape, behaviour, buttons, system };
+
+    // Each control shows its default: read it against fresh settings (the installer turns autostart on).
+    Settings saved = g_settings;
+    g_settings = Settings{};
+    g_settings.autostart = true;
+    for (auto& p : g_pages)
+        for (auto& c : p.controls) {
+            if (c.type == Control::Slider) c.def = c.value();
+            else if (c.type == Control::Segmented) c.def = (float)c.index();
+            else if (c.type == Control::Toggle && c.hasDefault) c.def = c.on() ? 1.f : 0.f;
+        }
+    g_settings = saved;
 }
 
 // ---------------------------------------------------------------- window state
@@ -260,7 +280,7 @@ void Draw(const std::wstring& t, IDWriteTextFormat* f, D2D1_RECT_F r, D2D1_COLOR
 }
 
 float RowHeight(const Control& c) {
-    float h = c.type == Control::Segmented ? 72.f : c.type == Control::Slider ? 62.f : 56.f;
+    float h = c.type == Control::Segmented ? 84.f : c.type == Control::Slider ? 68.f : 56.f;   // room for the "기본" marks
     return h + (c.hint ? 18 : 0);
 }
 
@@ -516,6 +536,7 @@ void Render() {
                 else if (hot && g_hoverSub == i) Fill(r, Wash(0.05f), 4);
                 Draw(c.options[i], (r.right - r.left) < wcslen(c.options[i]) * 8.5f ? g_fSegSmall.Get() : g_fSeg.Get(), r, i == cur ? Text() : Text(0.8f));
                 if (i == cur) Fill({ (r.left + r.right) / 2 - 8, r.bottom - 3, (r.left + r.right) / 2 + 8, r.bottom - 1 }, g_accent, 1);
+                if (i == (int)c.def) Draw(L"기본", g_fTiny.Get(), { r.left, bar.bottom + 2, r.right, bar.bottom + 17 }, Muted());
                 g_hots.push_back({ r, ci, i });
             }
             break;
@@ -524,7 +545,8 @@ void Render() {
             float v = c.value();
             Draw(c.label, g_fLabel.Get(), { x0, y, x1 - 140, y + 22 }, Text());
             g_brush->SetColor(g_accent);
-            Draw(c.text(v), g_fValue.Get(), { x1 - 200, y, x1, y + 22 }, g_accent);
+            bool atDefault = !std::isnan(c.def) && std::fabs(v - c.def) < c.step * 0.5f;
+            Draw(c.text(v) + (atDefault ? L" (기본)" : L""), g_fValue.Get(), { x1 - 200, y, x1, y + 22 }, g_accent);
             float top = y + 26;
             if (c.hint) { Draw(c.hint, g_fHint.Get(), { x0, top - 2, x1, top + 16 }, Muted()); top += 18; }
             float cy = top + 16, t = (std::clamp(v, c.lo, c.hi) - c.lo) / (c.hi - c.lo);
@@ -532,6 +554,11 @@ void Render() {
             float kx = track.left + (track.right - track.left) * t;
             Fill(track, Wash(0.22f), 2);
             Fill({ track.left, track.top, kx, track.bottom }, g_accent, 2);
+            if (!std::isnan(c.def)) {
+                float dx = track.left + (track.right - track.left) * (std::clamp(c.def, c.lo, c.hi) - c.lo) / (c.hi - c.lo);
+                Fill({ dx - 1, cy - 7, dx + 1, cy + 7 }, Muted(), 1);
+                Draw(L"기본", g_fTiny.Get(), { dx - 30, cy + 10, dx + 30, cy + 25 }, Muted());
+            }
             float kr = (hot || g_drag == ci) ? 10.f : 9.f;
             g_brush->SetColor(g_dark ? ColorF(0.27f, 0.27f, 0.29f) : ColorF(1, 1, 1));
             dc->FillEllipse({ { kx, cy }, kr, kr }, g_brush.Get());
@@ -550,6 +577,7 @@ void Render() {
             Draw(c.label, g_fLabel.Get(), { x0, y, tx - 12, y + 22 }, Text());
             if (c.hint) Draw(c.hint, g_fHint.Get(), { x0, y + 24, tx - 12, y + 42 }, Muted());
             D2D1_RECT_F r = { tx, ty, tx + sw, ty + sh };
+            if (!std::isnan(c.def)) Draw(c.def > 0.5f ? L"기본 켬" : L"기본 끔", g_fTiny.Get(), { tx - 8, ty + sh + 4, tx + sw + 8, ty + sh + 19 }, Muted());
             if (on) Fill(r, g_accent, sh / 2);
             else { Fill(r, Wash(hot ? 0.08f : 0.03f), sh / 2); g_brush->SetColor(Muted()); dc->DrawRoundedRectangle({ { r.left + .5f, r.top + .5f, r.right - .5f, r.bottom - .5f }, sh / 2, sh / 2 }, g_brush.Get(), 1); }
             float kx = on ? r.right - sh / 2 : r.left + sh / 2, kr = hot ? 7.f : 6.f;
@@ -577,7 +605,7 @@ void Render() {
         y += 4;
         D2D1_RECT_F r = { x0, y, x0 + 150, y + 34 };
         Fill(r, Wash(g_hover == -2 ? 0.12f : 0.07f), 6);
-        Draw(L"이 탭 기본값으로", g_fSeg.Get(), r, Text());
+        Draw(L"기본값으로", g_fSeg.Get(), r, Text());
         g_hots.push_back({ r, -2, 0 });
         y += 50;
     }

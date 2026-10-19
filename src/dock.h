@@ -156,6 +156,9 @@ private:
     void StartBounce(Slot& s, int count, bool loop, bool hiddenMode, double now);
     bool CreateDeviceResources();
     bool FullscreenAppActive() const;
+    // Start, search, quick settings or the notification centre is in front on this monitor
+    bool ShellPopupOpen() const;
+    static bool (*isShellPopup)(HWND);     // which windows count (replaceable for tests)
     void Click(const Hit& h);
     void EndDrag(bool commit);
 

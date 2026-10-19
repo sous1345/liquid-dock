@@ -101,6 +101,7 @@ const Field kFields[] = {
     { "edgeGap", &Settings::edgeGap, 0, 40 },
     { "edgeOffset", &Settings::edgeOffset, -100, 100 },
     { "autoHide", &Settings::autoHide },
+    { "showWithStart", &Settings::showWithStart },
     { "showDelay", &Settings::showDelay, 0, 2 },
     { "hideDelay", &Settings::hideDelay, 0, 3 },
     { "autostart", &Settings::autostart },

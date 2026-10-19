@@ -305,6 +305,19 @@ static void StateTests(Dock& d) {
  ResetHidden(d);g_apps.attentionEvents.push_back({1});Advance(d,Outside(d.mon),0.05);g_apps.attentionEvents.clear();
  Check((d.slots[1].bounceCount>0)==d.primary,"attention notification is restricted to primary monitor");
  ResetHidden(d);fgEnabled=true;fgRect=d.mon;fgMonitor=d.monitor;g_apps.attentionEvents.push_back({1});Advance(d,Outside(d.mon),0.05);g_apps.attentionEvents.clear();Check(d.slots[1].bounceCount==0,"fullscreen suppresses app attention bounce");
+ // the Windows key: Start (or search, quick settings, notifications) brings a hidden dock up and lets it go again
+ {
+  auto keepPopup=Dock::isShellPopup;Dock::isShellPopup=[](HWND h){return h==fgHandle;};
+  ResetHidden(d);fgEnabled=true;fgMonitor=d.monitor;fgRect={d.mon.left+100,d.mon.top+100,d.mon.left+700,d.mon.top+800};
+  Advance(d,Outside(d.mon),0.6);Check(d.reveal.target==1 && d.reveal.x>0.95f,"opening Start shows the hidden dock");
+  Advance(d,Outside(d.mon),1.5);Check(d.reveal.target==1,"the dock stays while Start is open");
+  fgEnabled=false;Advance(d,Outside(d.mon),1.6);Check(d.reveal.target==0 && d.reveal.x<0.002f,"closing Start puts the dock away again");
+  ResetHidden(d);fgEnabled=true;fgMonitor=(HMONITOR)(uintptr_t)0xD00D;fgRect={0,0,600,700};
+  Advance(d,Outside(d.mon),0.6);Check(d.reveal.target==0,"Start on another monitor leaves this dock hidden");
+  ResetHidden(d);g_settings.showWithStart=false;fgEnabled=true;fgMonitor=d.monitor;fgRect={d.mon.left+100,d.mon.top+100,d.mon.left+700,d.mon.top+800};
+  Advance(d,Outside(d.mon),0.6);Check(d.reveal.target==0,"with the option off Start leaves the dock hidden");
+  g_settings.showWithStart=true;Dock::isShellPopup=keepPopup;
+ }
  ResetHidden(d);
 }
 

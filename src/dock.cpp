@@ -281,6 +281,36 @@ void Dock::SyncSlots() {
     dirty = true;
 }
 
+namespace {
+// The shell's own pop-ups, by process: the taskbar comes up with them, so the dock does too.
+bool ShellPopupWindow(HWND w) {
+    static HWND last = nullptr; static bool lastResult = false;   // the foreground window rarely changes
+    if (w == last) return lastResult;
+    last = w; lastResult = false;
+    DWORD pid = 0; GetWindowThreadProcessId(w, &pid);
+    HANDLE p = pid ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : nullptr;
+    if (!p) return false;
+    wchar_t path[MAX_PATH]; DWORD n = MAX_PATH;
+    if (QueryFullProcessImageNameW(p, 0, path, &n)) {
+        const wchar_t* name = wcsrchr(path, L'\\'); name = name ? name + 1 : path;
+        for (const wchar_t* shell : { L"StartMenuExperienceHost.exe", L"SearchHost.exe", L"SearchApp.exe",
+                                      L"ShellExperienceHost.exe", L"ShellHost.exe" })
+            if (!_wcsicmp(name, shell)) { lastResult = true; break; }
+    }
+    CloseHandle(p);
+    return lastResult;
+}
+}
+
+bool (*Dock::isShellPopup)(HWND) = ShellPopupWindow;
+
+bool Dock::ShellPopupOpen() const {
+    HWND fg = GetForegroundWindow();
+    if (!fg || fg == hwnd) return false;
+    if (MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) != monitor) return false;
+    return isShellPopup(fg);
+}
+
 bool Dock::FullscreenAppActive() const {
     HWND fg = GetForegroundWindow();
     if (!fg || fg == hwnd) return false;
@@ -372,7 +402,9 @@ void Dock::Update(double now, float dt, POINT cursor) {
          CursorInPanel() ||
          (panelAlpha.target > 0.5f && cursorU >= cells[HitSensor].u0 - 4 * scale && cursorU <= cells[HitSensor].u1 + 4 * scale &&
           cursorV <= margin + barThick + 16 * scale));   // bridge between cell and panel
-    bool keep = menuOpen || dragging || pressSlot >= 0 || debugForceShow || settingsOpen || now < hotkeyHoldUntil;
+    // the Windows key (Start), Win+S, Win+A, Win+N: the dock comes up with them, like the taskbar would
+    bool shellPopup = g_settings.showWithStart && ShellPopupOpen();
+    bool keep = menuOpen || dragging || pressSlot >= 0 || debugForceShow || settingsOpen || now < hotkeyHoldUntil || shellPopup;
     bool fullscreen = FullscreenAppActive();
     bool inPreview = windowPreview.Contains(cursor);
     if (debugForceShow || settingsOpen) reveal.target = 1;
@@ -388,7 +420,12 @@ void Dock::Update(double now, float dt, POINT cursor) {
         }
         outsideSince = edgeSince = -1;
     } else if (reveal.target < 0.5f) {
-        if (atEdge) {
+        if (shellPopup) {
+            Log(L"shell pop-up in front: dock %d shown", index);
+            reveal.target = 1;
+            outsideSince = -1;
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        } else if (atEdge) {
             if (edgeSince < 0) edgeSince = now;
             lastCaptureWanted = now;        // pre-warm capture
             if (now - edgeSince >= g_settings.showDelay && !fullscreen) {
