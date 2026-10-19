@@ -42,6 +42,7 @@ namespace features {
     // newest first; skips folders, hidden files and unfinished downloads (.crdownload, .part, .tmp)
     struct RecentFile { std::wstring path, name, ago; };
     std::vector<RecentFile> RecentDownloads(size_t max);
+    std::vector<RecentFile> RecentFilesIn(const std::wstring& dir, size_t max);   // the same, for any folder
     std::wstring DownloadsFolder();
 }
 

@@ -9,6 +9,7 @@
 #include "../src/native_tray.h"
 #include <shellscalingapi.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <d2d1effects.h>
 #include <cstdio>
 #include <fstream>
@@ -70,7 +71,12 @@ bool Toggle(){++themeActions;themeLight=!themeLight;return true;}
 // Shell, Recycle Bin and audio stubs: the matrix never opens pages, deletes files or switches devices
 static int shellOpens=0; static std::wstring lastShellOpen;
 static HINSTANCE WINAPI MatrixShellExecute(HWND,LPCWSTR,LPCWSTR file,LPCWSTR,LPCWSTR,INT){++shellOpens;lastShellOpen=file?file:L"";return (HINSTANCE)42;}
-static int MatrixFileOperation(LPSHFILEOPSTRUCTW){return 0;}
+static std::vector<std::wstring> lastDeleted; static UINT lastDeleteFunc=0; static FILEOP_FLAGS lastDeleteFlags=0;
+static int MatrixFileOperation(LPSHFILEOPSTRUCTW op){
+ lastDeleted.clear();lastDeleteFunc=op->wFunc;lastDeleteFlags=op->fFlags;
+ for(const wchar_t* p=op->pFrom;p&&*p;p+=wcslen(p)+1)lastDeleted.push_back(p);
+ return 0;
+}
 static HRESULT WINAPI MatrixEmptyRecycleBin(HWND,LPCWSTR,DWORD){return S_OK;}
 #include "../src/audio_devices.h"
 static int audioSwitches=0;
@@ -517,6 +523,65 @@ static void PreviewCouplingTests(int actualCount) {
  }
 }
 
+// ---- units: the button list, the recent-files scan and the trash drop (no real files are deleted)
+static void UnitTests() {
+ ++cases;caseFailures=0;caseLabel="units";
+ Check(FormatButtons(ParseButtons("trash, awake,trash,network,settings,bogus,,quiet"))=="trash,awake,quiet","button list drops duplicates, fixed buttons and unknown keys, keeps order");
+ Check(ParseButtons("").empty() && FormatButtons({}).empty(),"an empty button list stays empty");
+ g_settings=Settings{};g_settings.trayButtons="theme";
+ SetButton(ButtonId::Trash,true);SetButton(ButtonId::Trash,true);
+ Check(g_settings.trayButtons=="theme,trash","adding a button appends it once");
+ SetButton(ButtonId::Theme,false);SetButton(ButtonId::Settings,false);
+ Check(g_settings.trayButtons=="trash" && HasButton(ButtonId::Settings) && HasButton(ButtonId::Network),"removing works; fixed buttons cannot be removed");
+ // cell planning: stacking pairs neighbours, odd one keeps a whole cell, widths from the catalogue
+ std::vector<PlannedCell> cells;
+ float end=PlanButtons({ButtonId::Desktop,ButtonId::Theme,ButtonId::Settings},40,1,true,100,&cells);
+ Check(cells.size()==3 && cells[0].half==0 && cells[1].half==1 && cells[0].u0==cells[1].u0 && cells[2].half==-1,"stacked plan pairs the first two, the third stays whole");
+ Check(std::fabs(cells[2].u1-cells[2].u0-32)<0.01f && std::fabs(end-cells[2].u1)<0.01f,"settings cell keeps its 32 px minimum and ends the group");
+ PlanButtons({ButtonId::Desktop,ButtonId::Theme},40,1,false,0,&cells);
+ Check(cells[0].half==-1 && cells[1].u0==cells[0].u1,"unstacked plan places buttons side by side");
+
+ // recent files: newest first; unfinished downloads, hidden files and folders skipped
+ std::wstring dir=AppDataDir()+L"\\recent-fixture";
+ CreateDirectoryW(dir.c_str(),nullptr);
+ WIN32_FIND_DATAW fd;HANDLE fh=FindFirstFileW((dir+L"\\*").c_str(),&fd);
+ if(fh!=INVALID_HANDLE_VALUE){do{if(!(fd.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)){std::wstring p=dir+L"\\"+fd.cFileName;SetFileAttributesW(p.c_str(),FILE_ATTRIBUTE_NORMAL);DeleteFileW(p.c_str());}}while(FindNextFileW(fh,&fd));FindClose(fh);}
+ FILETIME now;GetSystemTimeAsFileTime(&now);
+ auto make=[&](const wchar_t* name,int minutesAgo,DWORD attrs=0){
+  std::wstring p=dir+L"\\"+name;HANDLE h=CreateFileW(p.c_str(),GENERIC_WRITE,0,nullptr,CREATE_ALWAYS,0,nullptr);
+  ULARGE_INTEGER t;t.LowPart=now.dwLowDateTime;t.HighPart=now.dwHighDateTime;t.QuadPart-=(ULONGLONG)minutesAgo*600000000ULL;
+  FILETIME ft={t.LowPart,t.HighPart};SetFileTime(h,&ft,&ft,&ft);CloseHandle(h);
+  if(attrs)SetFileAttributesW(p.c_str(),attrs);
+ };
+ make(L"old.txt",60*5);make(L"older.txt",60*24*3);make(L"new & shiny.zip",5);make(L"half.crdownload",1);make(L"part.part",1);make(L"temp.tmp",1);
+ make(L"hidden.txt",0,FILE_ATTRIBUTE_HIDDEN);CreateDirectoryW((dir+L"\\folder").c_str(),nullptr);
+ auto files=features::RecentFilesIn(dir,15);
+ Check(files.size()==3,"recent files skip unfinished downloads, hidden files and folders");
+ if(files.size()==3){
+  Check(files[0].name==L"new & shiny.zip" && files[1].name==L"old.txt" && files[2].name==L"older.txt","recent files are newest first");
+  Check(files[0].ago==L"5분 전" && files[1].ago==L"5시간 전" && files[2].ago==L"3일 전","recent files say how long ago in minutes, hours and days");
+ }
+ Check(features::RecentFilesIn(dir,1).size()==1,"recent files respect the maximum");
+ Check(features::RecentFilesIn(dir+L"\\missing",15).empty(),"a missing folder gives an empty list");
+
+ // trash drop: the dropped paths go to the Recycle Bin call, with undo (never a permanent delete)
+ std::wstring a=dir+L"\\old.txt",b=dir+L"\\new & shiny.zip";
+ size_t chars=a.size()+1+b.size()+1+1;
+ HGLOBAL mem=GlobalAlloc(GHND,sizeof(DROPFILES)+chars*sizeof(wchar_t));
+ auto* df=(DROPFILES*)GlobalLock(mem);df->pFiles=sizeof(DROPFILES);df->fWide=TRUE;
+ wchar_t* list=(wchar_t*)((BYTE*)df+sizeof(DROPFILES));
+ wcscpy_s(list,a.size()+1,a.c_str());wcscpy_s(list+a.size()+1,b.size()+1,b.c_str());
+ GlobalUnlock(mem);
+ Dock d(monitors[0].handle,9999,monitors[0].primary);
+ lastDeleted.clear();
+ bool ok=d.DropOnTrash((HDROP)mem);
+ Check(ok && lastDeleted.size()==2 && lastDeleted[0]==a && lastDeleted[1]==b,"dropped files are passed to the Recycle Bin");
+ Check(lastDeleteFunc==FO_DELETE && (lastDeleteFlags&FOF_ALLOWUNDO),"the trash drop recycles (undo allowed)");
+ Check(GetFileAttributesW(a.c_str())!=INVALID_FILE_ATTRIBUTES,"the test never deletes for real");
+ GlobalFree(mem);
+ report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
+}
+
 int wmain(int argc,wchar_t** argv) {
  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
  winrt::init_apartment(winrt::apartment_type::single_threaded);
@@ -538,6 +603,7 @@ int wmain(int argc,wchar_t** argv) {
   printf("RENDER checks=%d failed=%d frames=%d; sample data only\n",checks,failures,actualCount*64);return failures?1:0;
  }
  report.open(AppDataDir()+L"\\matrix-results.tsv");
+ UnitTests();
  monitors.push_back({(HMONITOR)(uintptr_t)0x1001,{-1920,0,0,1080},false,false,"simulated-left-negative"});
  monitors.push_back({(HMONITOR)(uintptr_t)0x1002,{0,-1440,2560,0},false,false,"simulated-above-negative"});
  monitors.push_back({(HMONITOR)(uintptr_t)0x1003,{3840,-200,5280,2360},false,false,"simulated-portrait"});
@@ -670,6 +736,24 @@ int wmain(int argc,wchar_t** argv) {
   d.HotkeyReveal(simTime);
   auto p=d.ScreenPointUV(d.slots[1].u,d.margin+d.barThick/2);Advance(d,p,4.0);
   Check(d.reveal.target==1,"shortcut: the dock stays while the pointer is on it");
+  report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
+ }
+ // Button lists: none, one, odd, every button, reversed, mixed; with crowded and sparse docks.
+ const char* lists[]={"","trash","awake,quiet,screenshot","desktop,theme,oled,awake,screenshot,quiet,trash,downloads,audio",
+  "audio,downloads,trash,quiet,screenshot,awake,oled,theme,desktop","downloads,desktop"};
+ for(const auto& monitor:monitors)for(int edge=0;edge<4;++edge)for(int li=0;li<6;++li)for(bool crowded:{false,true}){
+  ++cases;caseFailures=0;
+  std::ostringstream label;label<<"buttons list="<<li<<" crowded="<<crowded<<" "<<monitor.name<<" edge="<<edge;caseLabel=label.str();
+  g_settings=Settings{};g_settings.edge=(Edge)edge;g_settings.trayButtons=lists[li];
+  if(crowded){g_settings.iconSize=54;g_settings.magnification=2.1f;}
+  Apps(crowded?40:8);Dock d(monitor.handle,cases,monitor.primary);InitializeLayout(d);
+  for(int i=0;i<60;++i){d.ApplyFit(1.f/60.f);d.Layout(0);}
+  Check(d.barU0>=-1 && d.barU1<=d.len+1,"any button list keeps the dock on the monitor");
+  OptionsTests(d);SweepTests(d);
+  // a list change applies in place
+  g_settings.trayButtons=lists[(li+1)%6];
+  Check(d.Relayout(),"changing the button list relays out without recreating the window");
+  ResetHidden(d);Advance(d,EdgePoint(d.mon,g_settings.edge,0.5f,0),0.8);AssertHitGeometry(d);
   report<<(caseFailures?"CASE_FAIL":"CASE_PASS")<<"\t"<<caseLabel<<"\t"<<caseFailures<<"\n";
  }
  RenderOptions(actualCount);

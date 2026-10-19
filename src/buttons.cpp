@@ -121,10 +121,11 @@ std::wstring DownloadsFolder() {
     return s;
 }
 
-std::vector<RecentFile> RecentDownloads(size_t max) {
+std::vector<RecentFile> RecentDownloads(size_t max) { return RecentFilesIn(DownloadsFolder(), max); }
+
+std::vector<RecentFile> RecentFilesIn(const std::wstring& dir, size_t max) {
     struct Entry { RecentFile f; ULONGLONG t; };
     std::vector<Entry> all;
-    std::wstring dir = DownloadsFolder();
     if (dir.empty()) return {};
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileExW((dir + L"\\*").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
